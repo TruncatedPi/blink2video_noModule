@@ -148,5 +148,116 @@ class TestsOnboardingPort(unittest.TestCase):
         port_ouvert.assert_called_once_with(9555)
 
 
+class _ProcessusVivant:
+    """Enfant qui tourne jusqu'à l'arrêt coopératif (demander_arret)."""
+
+    arret_demande = False
+
+    def __init__(self, pid: int):
+        self.pid = pid
+
+    def poll(self):
+        return 0 if _ProcessusVivant.arret_demande else None
+
+
+@contextlib.contextmanager
+def _superviseur_simule(*, processus, icone=None, lancer=None):
+    """executer() sans vrai processus : verrous, fiches, drapeau d'arrêt et
+    icône simulés. ``demander_arret`` arrête les enfants simulés."""
+    _ProcessusVivant.arret_demande = False
+
+    def demander_arret():
+        _ProcessusVivant.arret_demande = True
+
+    with mock.patch.object(
+        blink_cli.runtime, "verrou_controle", return_value=contextlib.nullcontext(),
+    ), mock.patch.object(
+        blink_cli.runtime, "inscrire_instance",
+    ), mock.patch.object(
+        blink_cli.runtime, "demarrer", side_effect=processus,
+    ), mock.patch.object(
+        blink_cli.runtime, "self_command", return_value=["faux"],
+    ), mock.patch.object(
+        blink_cli.runtime, "flags_enfant", return_value=0,
+    ), mock.patch.object(
+        blink_cli.runtime, "lire_reglages", return_value={"port": 8765},
+    ), mock.patch.object(
+        blink_cli.runtime, "demander_arret", side_effect=demander_arret,
+    ) as arret, mock.patch.object(
+        blink_cli.runtime, "effacer_arret_demande",
+    ), mock.patch.object(
+        blink_cli.runtime, "arreter_processus",
+    ), mock.patch.object(
+        blink_cli.runtime, "lancer", side_effect=lancer,
+    ), mock.patch.object(
+        tray, "disponible", return_value=icone is not None,
+    ), mock.patch.object(
+        tray, "executer", side_effect=icone,
+    ), mock.patch.object(blink_cli.time, "sleep"), \
+            contextlib.redirect_stdout(io.StringIO()) as sortie:
+        yield arret, sortie
+
+
+class TestsPortIcone(unittest.TestCase):
+    """Audit du 26/09/2026, B05 : start place les options enregistrées avant
+    les explicites. Le serveur retient la dernière occurrence de --port ;
+    l'icône doit recevoir ce même port, forme --port=N comprise."""
+
+    def _port_recu(self, arguments_serve: list) -> int:
+        recus = []
+
+        def icone(port, fin, nettoyer):
+            recus.append(port)
+            _ProcessusVivant.arret_demande = True
+
+        with _superviseur_simule(processus=[_ProcessusVivant(101), _ProcessusVivant(102)],
+                                 icone=icone):
+            blink_cli.executer([["serve", *arguments_serve], ["watch", "--loop", "1"]])
+        return recus[0]
+
+    def test_la_derniere_occurrence_l_emporte(self):
+        self.assertEqual(self._port_recu(["--port", "8765", "--port", "9555"]), 9555)
+
+    def test_la_forme_egale_est_reconnue(self):
+        self.assertEqual(self._port_recu(["--port", "8765", "--port=9555"]), 9555)
+
+    def test_sans_port_explicite_le_port_enregistre(self):
+        self.assertEqual(self._port_recu([]), 8765)
+
+
+class TestsNettoyageEtapesPonctuelles(unittest.TestCase):
+    """Audit du 26/09/2026, B06 : une interruption ou un échec de lancement
+    pendant une étape ponctuelle arrête aussi les processus persistants déjà
+    démarrés, au lieu de les laisser tourner sans superviseur."""
+
+    def test_echec_de_lancement_arrete_les_persistants(self):
+        with _superviseur_simule(processus=[_ProcessusVivant(101)],
+                                 lancer=OSError("introuvable")) as (arret, _):
+            with self.assertRaises(OSError):
+                blink_cli.executer([["serve"], ["download"]])
+        arret.assert_called_once()
+
+    def test_ctrl_c_pendant_une_etape_arrete_les_persistants(self):
+        with _superviseur_simule(processus=[_ProcessusVivant(101)],
+                                 lancer=KeyboardInterrupt()) as (arret, sortie):
+            try:
+                blink_cli.executer([["serve"], ["download"]])
+            except KeyboardInterrupt:
+                # Capturée ici pour échouer proprement : laissée libre, elle
+                # interromprait toute la suite de tests.
+                self.fail("Ctrl+C a échappé au superviseur, serve laissé actif")
+        arret.assert_called_once()
+        self.assertIn(blink_cli.msg("interruption_clavier"), sortie.getvalue())
+
+    def test_sans_persistant_aucun_drapeau_d_arret(self):
+        # Le drapeau d'arrêt est commun à tous les processus blink2video :
+        # une composition sans enfant ne doit jamais le poser.
+        with _superviseur_simule(processus=[],
+                                 lancer=KeyboardInterrupt()) as (arret, _):
+            with self.assertRaises(KeyboardInterrupt):
+                blink_cli.executer([["download"], ["merge"]])
+        arret.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

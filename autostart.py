@@ -61,6 +61,12 @@ LIBELLES = {
         "demarrage_retire": "Démarrage automatique retiré : {cible}",
         "demarrage_deja_absent": "Démarrage automatique déjà absent : {cible}",
         "demarrage_installe": "Démarrage automatique installé : {cible}",
+        "installation_refusee":
+            "Échec du démarrage automatique : {commande} a répondu {code}. "
+            "Fichier laissé en place pour examen : {cible}",
+        "plist_invalide":
+            "Échec du démarrage automatique : l'agent généré n'est pas un plist "
+            "valide ({erreur}). Rien n'a été écrit.",
         "commande_label": "  commande : {commande}",
         "prendra_effet": "  Il prendra effet à la prochaine ouverture de session.",
         "session_systemd_absente":
@@ -103,6 +109,12 @@ LIBELLES = {
         "demarrage_retire": "Autostart removed: {cible}",
         "demarrage_deja_absent": "Autostart already absent: {cible}",
         "demarrage_installe": "Autostart installed: {cible}",
+        "installation_refusee":
+            "Autostart failed: {commande} returned {code}. "
+            "File left in place for inspection: {cible}",
+        "plist_invalide":
+            "Autostart failed: the generated agent is not a valid plist "
+            "({erreur}). Nothing was written.",
         "commande_label": "  command: {commande}",
         "prendra_effet": "  It will take effect at the next login.",
         "session_systemd_absente":
@@ -302,7 +314,11 @@ def _macos(etat: str, simulation: bool, quoi: tuple = DEFAUT) -> int:
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return _retirer(cible, simulation)
 
-    arguments = "".join(f"    <string>{a}</string>\n" for a in commande(quoi))
+    # Valeurs échappées : un dossier comme « Blink & Videos » écrivait un &
+    # brut, et launchd refusait le plist (audit du 26/09/2026, B08). Même
+    # échappement que le jumeau lidar2map.
+    from xml.sax.saxutils import escape
+    arguments = "".join(f"    <string>{escape(a)}</string>\n" for a in commande(quoi))
     contenu = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
@@ -310,13 +326,22 @@ def _macos(etat: str, simulation: bool, quoi: tuple = DEFAUT) -> int:
         '<plist version="1.0"><dict>\n'
         f'  <key>Label</key><string>com.nico579.{NOM}</string>\n'
         f'  <key>ProgramArguments</key>\n  <array>\n{arguments}  </array>\n'
-        f'  <key>WorkingDirectory</key><string>{runtime.app_dir()}</string>\n'
+        f'  <key>WorkingDirectory</key><string>{escape(str(runtime.app_dir()))}</string>\n'
         '  <key>RunAtLoad</key><true/>\n'
         # Relance la surveillance si elle s'interrompt : un chien de garde qui
         # s'arrête en silence ne vaut rien.
         '  <key>KeepAlive</key><true/>\n'
         '</dict></plist>\n'
     )
+
+    # Relu avant d'être écrit : jamais d'agent annoncé installé que launchd
+    # refuserait à la prochaine ouverture de session.
+    import plistlib
+    try:
+        plistlib.loads(contenu.encode("utf-8"))
+    except Exception as erreur:
+        print(_("plist_invalide", erreur=erreur))
+        return 1
     if simulation:
         print(_("ecrirait", cible=cible, contenu=contenu))
         return 0
@@ -348,6 +373,18 @@ def env_systemctl(environ=None, uid=None, racine: Path = Path("/run/user")) -> d
     return env
 
 
+def argument_systemd(valeur: str) -> str:
+    """Un argument d'ExecStart= entre guillemets, selon les règles de systemd
+    (man systemd.service, « Command lines ») : antislash et guillemet
+    échappés, % doublé (spécificateurs), $ doublé (substitution de
+    variables). Une simple jointure par espaces coupait en deux un chemin
+    comme « /home/moi/Blink Videos/blink2video » (audit du 26/09/2026, B07).
+    Même échappement que le jumeau lidar2map, $ en plus."""
+    echappe = (valeur.replace("\\", "\\\\").replace('"', '\\"')
+               .replace("%", "%%").replace("$", "$$"))
+    return f'"{echappe}"'
+
+
 def _linux(etat: str, simulation: bool, quoi: tuple = DEFAUT) -> int:
     dossier = Path.home() / ".config/systemd/user"
     if etat == "status":
@@ -369,8 +406,10 @@ def _linux(etat: str, simulation: bool, quoi: tuple = DEFAUT) -> int:
         "[Unit]\n"
         "Description=Surveillance blink2video\n\n"
         "[Service]\n"
-        f"ExecStart={' '.join(commande(quoi))}\n"
-        f"WorkingDirectory={runtime.app_dir()}\n"
+        f"ExecStart={' '.join(argument_systemd(a) for a in commande(quoi))}\n"
+        # Une seule valeur, que systemd ne découpe pas ; seuls ses
+        # spécificateurs % y sont interprétés.
+        f"WorkingDirectory={str(runtime.app_dir()).replace('%', '%%')}\n"
         "Restart=on-failure\n\n"
         "[Install]\n"
         "WantedBy=default.target\n"
@@ -381,13 +420,20 @@ def _linux(etat: str, simulation: bool, quoi: tuple = DEFAUT) -> int:
     cible.parent.mkdir(parents=True, exist_ok=True)
     cible.write_text(contenu, encoding="utf-8")
     runtime.lancer(["systemctl", "--user", "daemon-reload"], check=False, env=env)
-    runtime.lancer(["systemctl", "--user", "enable", "--now", etiquette(quoi)],
-                   check=False, env=env)
-    code = _installe(cible, quoi)
+    activation = ["systemctl", "--user", "enable", "--now", etiquette(quoi)]
+    resultat = runtime.lancer(activation, check=False, env=env)
     if not env.get("XDG_RUNTIME_DIR"):
+        code = _installe(cible, quoi)
         import getpass
         print(_("session_systemd_absente", utilisateur=getpass.getuser()))
-    return code
+        return code
+    # Avec une session systemd, un refus est un vrai échec : ne plus
+    # l'annoncer comme une installation réussie (audit du 26/09/2026, B07).
+    if resultat.returncode != 0:
+        print(_("installation_refusee", commande=" ".join(activation),
+                code=resultat.returncode, cible=cible))
+        return 1
+    return _installe(cible, quoi)
 
 
 # ------------------------------------------------------------------- communs

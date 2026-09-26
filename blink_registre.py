@@ -359,6 +359,30 @@ class _ClipConnu:
         self.id = entree.get("remote_id") or 0
         self.device_id = entree.get("device_id") or ""
         self.network_id = entree.get("network_id") or ""
+        # Provenance et identifiant distant, pour meme_evenement_cloud().
+        self.source = entree.get("source") or "usb"
+        self.remote_id = str(entree.get("remote_id") or "")
+
+
+def _identifiants_cloud_distincts(connu, clip) -> bool:
+    """Vrai si l'entrée cloud ``connu`` et le clip cloud ``clip`` portent deux
+    identifiants distants différents : ce sont alors deux médias, quel que
+    soit leur écart dans le temps (audit du 26/09/2026, B01). Une entrée USB
+    garde dans remote_id son numéro de manifeste, que le Sync Module
+    renumérote : il n'est jamais comparable à un identifiant cloud. Une
+    vieille entrée sans identifiant reste rapprochée par l'instant seul."""
+    if getattr(connu, "source", "") != "cloud":
+        return False
+    gauche = str(getattr(connu, "remote_id", "") or "")
+    droite = str(getattr(clip, "id", "") or "")
+    return bool(gauche and droite and gauche != droite)
+
+
+def meme_evenement_cloud(connu, clip, sync=None) -> bool:
+    """Une entrée connue peut-elle être le même événement que ce clip cloud ?
+    Même caméra à la tolérance près, sauf deux identifiants cloud différents."""
+    return (_meme_camera(connu, clip, sync_droite=sync)
+            and not _identifiants_cloud_distincts(connu, clip))
 
 
 class _IndexRegistre:
@@ -453,7 +477,9 @@ def _trouver_entree(state: dict, sync, clip,
         if cle in (consumed or ()):
             continue
         ecart = abs((instant_connu - instant).total_seconds())
-        if _meme_camera(connu, clip, sync_droite=sync):
+        compatible = (meme_evenement_cloud(connu, clip, sync) if source == "cloud"
+                      else _meme_camera(connu, clip, sync_droite=sync))
+        if compatible:
             classement = (
                 not bool(candidat.get("excluded")),
                 cle != cle_exacte,

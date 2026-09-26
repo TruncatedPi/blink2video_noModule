@@ -726,7 +726,8 @@ def _apparier_evenements(locaux: list, distants: list, tolerance: int = 2, *,
     )
 
 
-def rapprocher(locaux: list, cloud: list, tolerance: int = 2) -> tuple:
+def rapprocher(locaux: list, cloud: list, tolerance: int = 2,
+               compatibles=None) -> tuple:
     """Sépare les clips cloud inédits de ceux déjà offerts localement.
 
     Une même détection peut être écrite des deux côtés lorsque l'abonnement
@@ -737,12 +738,21 @@ def rapprocher(locaux: list, cloud: list, tolerance: int = 2) -> tuple:
     en double dans la journalière.
 
     Fonction pure, éprouvée par la suite dédiée sans compte Blink."""
-    paires = _apparier_evenements(locaux, cloud, tolerance)
+    inedits, doublons, _ = rapprocher_paires(locaux, cloud, tolerance, compatibles)
+    return inedits, doublons
+
+
+def rapprocher_paires(locaux: list, cloud: list, tolerance: int = 2,
+                      compatibles=None) -> tuple:
+    """Comme rapprocher(), en rendant aussi les paires (indice local, indice
+    cloud) retenues : l'appelant sait ainsi quelles entrées locales le plan a
+    déjà associées, et ne les réattribue pas à un autre clip."""
+    paires = _apparier_evenements(locaux, cloud, tolerance, compatibles=compatibles)
     cloud_pris = {indice_cloud for _, indice_cloud in paires}
 
     doublons = [clip for indice, clip in enumerate(cloud) if indice in cloud_pris]
     inedits = [clip for indice, clip in enumerate(cloud) if indice not in cloud_pris]
-    return inedits, doublons
+    return inedits, doublons, paires
 
 
 def clip_datetime_utc(clip) -> dt.datetime:

@@ -399,6 +399,23 @@ def read_entries(paths: dict) -> dict:
     return md.read_registry(paths["input"] / md.DOWNLOAD_STATE)
 
 
+def nombre_clips_connus(entries: dict) -> int:
+    """Clips du registre comptés comme total_known["clip"] de collect() :
+    la page compare les deux pour annoncer les nouveaux clips (audit du
+    26/09/2026, B03). Compter aussi une entrée illisible, que la galerie
+    ignore, annoncerait un « nouveau » clip à chaque sondage et relancerait
+    sans fin l'actualisation automatique."""
+    total = 0
+    for entry in entries.values():
+        try:
+            entry["path"]
+            md.parse_created_at(entry["created_at"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        total += 1
+    return total
+
+
 ETIQUETTES_SOURCE = {"usb": "local", "cloud": "cloud"}
 
 # Un seul réassemblage à la fois : deux assemblages simultanés de la même
@@ -3670,7 +3687,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # page ne doit pas attendre un serveur distant. Un fil de fond tient
             # ce cache à jour.
             self.send_json({"passages": runtime.passages(),
-                            "clips": len(read_entries(self.paths)),
+                            "clips": nombre_clips_connus(read_entries(self.paths)),
                             "maj": maj.disponible(reseau=False)})
             return
 

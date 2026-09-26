@@ -1039,18 +1039,6 @@ def executer(groupes: list) -> int:
         print(msg("impossible_demarrer_pendant_arret", erreur=erreur))
         return 1
 
-    # Les passages uniques, l'un après l'autre, dans l'ordre où ils sont cités.
-    pire_ponctuel = 0
-    for verbe, *arguments in ponctuels:
-        print(msg("etape_verbe", commande=f"{verbe} {' '.join(arguments)}".rstrip()))
-        resultat = runtime.lancer(
-            runtime.self_command(verbe, *arguments), cwd=str(runtime.app_dir()),
-            stdin=subprocess.DEVNULL, check=False,
-        )
-        pire_ponctuel = max(pire_ponctuel, abs(resultat.returncode))
-    if not lances:
-        return pire_ponctuel
-
     # Surveillés ensemble plutôt qu'attendus l'un après l'autre : un verbe qui
     # meurt à la première seconde doit se voir tout de suite, et non à la fin
     # d'une boucle qui tournera des jours. Les autres continuent, l'interface
@@ -1102,8 +1090,13 @@ def executer(groupes: list) -> int:
     # tapé seul.
     port = runtime.lire_reglages()["port"]
     for verbe, *arguments in persistant:
-        if verbe == "serve" and "--port" in arguments:
-            port = int(arguments[arguments.index("--port") + 1])
+        # Même lecture que le serveur : la dernière occurrence de --port
+        # l'emporte, et la forme --port=9555 compte aussi. start place les
+        # options enregistrées avant les explicites : la première occurrence
+        # envoyait l'icône sur l'ancien port (audit du 26/09/2026, B05).
+        demande = _port_demande(arguments) if verbe == "serve" else None
+        if demande is not None:
+            port = demande
 
     import tray
 
@@ -1146,7 +1139,25 @@ def executer(groupes: list) -> int:
         if not any(p.poll() is None for _, p in lances):
             runtime.effacer_arret_demande()
 
+    # Toute la vie des processus persistants est couverte, étapes ponctuelles
+    # comprises : une interruption (Ctrl+C) ou un échec de lancement pendant
+    # l'une d'elles laissait tourner les persistants, sans plus personne pour
+    # les arrêter (audit du 26/09/2026, B06). Sous POSIX, ils ont leur propre
+    # session : le signal du terminal ne les atteint pas.
+    pire_ponctuel = 0
     try:
+        # Les passages uniques, l'un après l'autre, dans l'ordre où ils sont
+        # cités.
+        for verbe, *arguments in ponctuels:
+            print(msg("etape_verbe", commande=f"{verbe} {' '.join(arguments)}".rstrip()))
+            resultat = runtime.lancer(
+                runtime.self_command(verbe, *arguments), cwd=str(runtime.app_dir()),
+                stdin=subprocess.DEVNULL, check=False,
+            )
+            pire_ponctuel = max(pire_ponctuel, abs(resultat.returncode))
+        if not lances:
+            return pire_ponctuel
+
         # L'icône de zone de notification (Ouvrir/Redémarrer/Arrêter) exige
         # le thread principal sous macOS : la surveillance des verbes passe
         # alors sur un thread à part, qui referme l'icône si l'un d'eux
@@ -1167,9 +1178,16 @@ def executer(groupes: list) -> int:
         else:
             surveiller()
     except KeyboardInterrupt:
+        # Sans processus persistant, rien à nettoyer ici : l'interruption
+        # remonte comme avant.
+        if not lances:
+            raise
         print(msg("interruption_clavier"))
     finally:
-        nettoyer_lances()
+        # Jamais sans enfant : nettoyer_lances() pose le drapeau d'arrêt
+        # commun, que d'autres processus blink2video liraient.
+        if lances:
+            nettoyer_lances()
     return max(pire, pire_ponctuel)
 
 
