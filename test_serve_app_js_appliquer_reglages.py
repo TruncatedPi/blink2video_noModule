@@ -103,6 +103,10 @@ globalThis.fetch = async (url, options) => {
   if (url !== '/api/status') throw new Error(`Requête inattendue : ${url}`);
   const statut = statuts.length ? statuts.shift() : {initial_setup: true};
   if (statut === 'reseau') throw new TypeError('Serveur arrêté');
+  // Serveur remplaçant, jeton différent : 403 en HTML (send_error).
+  if (statut === 'jeton') return {status: 403, json: async () => {
+    throw new SyntaxError('Unexpected token <');
+  }};
   return {json: async () => {
     if (statut === 'json') throw new SyntaxError('Statut incomplet');
     return statut;
@@ -387,6 +391,20 @@ function instantane() {
             reponse={"initial_setup": True}, statuts=["reseau"], actions=["poll", 60000],
         )
         self._verifier_echec_attente(resultat["etapes"][-1])
+
+    def test_configuration_initiale_nouveau_jeton_recharge_la_page(self):
+        # Audit du 26/09/2026, B04 : le serveur remplaçant a son propre jeton,
+        # /api/status répond 403 en HTML. L'attente recharge la page, qui
+        # obtiendra ce jeton, au lieu de sonder en silence jusqu'au délai.
+        resultat = self._executer(
+            reponse={"initial_setup": True}, statuts=["reseau", "jeton"],
+            actions=["poll", "poll"],
+        )
+        self.assertEqual(resultat["etapes"][0]["rechargements"], 0)
+        final = resultat["etapes"][-1]
+        self.assertEqual(final["rechargements"], 1)
+        self.assertEqual(final["intervalles"], [])
+        self.assertEqual(final["temporisations"], [])
 
 
 if __name__ == "__main__":

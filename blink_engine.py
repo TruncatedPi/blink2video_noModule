@@ -330,11 +330,15 @@ class _PlanUSB:
 
 
 class _PlanCloud:
-    def __init__(self, clips=None, pending=None, adopted=0, skipped=0):
+    def __init__(self, clips=None, pending=None, adopted=0, skipped=0,
+                 consommees=None):
         self.clips = clips or []
         self.pending = pending or []
         self.adopted = adopted
         self.skipped = skipped
+        # Clés du registre déjà associées à un clip par l'inventaire, ou
+        # adoptées : la revalidation ne les réattribue à aucun autre clip.
+        self.consommees = set(consommees or ())
 
 
 class _DownloadJob:
@@ -405,27 +409,38 @@ async def _inventorier_cloud(blink: Blink, args, output: Path,
     # Le rapprochement se fait avec ce qui est déjà au registre, et non avec le
     # manifeste USB : celui-ci ne montre que ce que la clé contient encore,
     # alors que le registre garde la trace de tout ce qui a été rapatrié.
-    connus = [
-        blink_registre._ClipConnu(entree)
-        for entree in state["clips"].values()
+    acquises = [
+        (cle, entree) for cle, entree in state["clips"].items()
         if blink_registre._entree_acquise(output, entree)
     ]
+    connus = [blink_registre._ClipConnu(entree) for _, entree in acquises]
     tombstones = [
         blink_registre._ClipConnu(entree)
         for entree in state["clips"].values()
         if isinstance(entree, dict) and entree.get("excluded")
     ]
+    # Deux identifiants cloud différents ne sont jamais le même événement,
+    # même à une seconde d'écart (audit du 26/09/2026, B01) : la tolérance
+    # rapproche des sources différentes, ou de vieilles entrées sans
+    # identifiant.
+    meme_evenement = blink_registre.meme_evenement_cloud
     sans_tombstone = (
-        blink_models.rapprocher(tombstones, clips)[0] if tombstones else list(clips)
+        blink_models.rapprocher(tombstones, clips, compatibles=meme_evenement)[0]
+        if tombstones else list(clips)
     )
     # `sans_tombstone` contient les clips sans exclusion ; une décision explicite
     # reste donc prioritaire même lors d'un retéléchargement forcé.
     clips_autorises = sans_tombstone
     ignores_exclus = len(clips) - len(clips_autorises)
     if args.overwrite:
-        inedits, doublons = clips_autorises, []
+        inedits, doublons, consommees = clips_autorises, [], set()
     else:
-        inedits, doublons = blink_models.rapprocher(connus, clips_autorises)
+        inedits, doublons, paires = blink_models.rapprocher_paires(
+            connus, clips_autorises, compatibles=meme_evenement,
+        )
+        # Chaque entrée associée par le plan l'est une fois pour toutes :
+        # la revalidation ne la réattribue pas à un clip voisin.
+        consommees = {acquises[indice][0] for indice, _ in paires}
     print(msg("cloud_inventaire_resume", total=len(clips), doublons=len(doublons),
               inedits=len(inedits)))
     if args.command != "download" or not inedits:
@@ -440,7 +455,7 @@ async def _inventorier_cloud(blink: Blink, args, output: Path,
         sync = _HubCloud(clip.network_id)
         target = blink_models.target_path(output, clip, sync=sync, source="cloud")
         _, entree_connue = blink_registre._trouver_entree(
-            state, sync, clip, source="cloud",
+            state, sync, clip, consumed=consommees, source="cloud",
         )
         if (
             entree_connue is None
@@ -452,6 +467,7 @@ async def _inventorier_cloud(blink: Blink, args, output: Path,
             blink_registre.remember_download(state, sync, args.hub or "", clip, output,
                               target, source="cloud")
             blink_registre.save_download_state(output, state)
+            consommees.add(blink_registre.state_key(sync, clip, source="cloud"))
             adopted += 1
             continue
         pending.append(clip)
@@ -461,6 +477,7 @@ async def _inventorier_cloud(blink: Blink, args, output: Path,
         pending=pending,
         adopted=adopted,
         skipped=len(doublons) + ignores_exclus,
+        consommees=consommees,
     )
 
 
@@ -496,9 +513,20 @@ async def _telecharger_cloud(blink: Blink, args, output: Path, state: dict,
     if jobs_a_executer:
         print(msg("cloud_section_titre"))
 
+    # Entrées déjà associées à un clip (audit du 26/09/2026, B01) : celles du
+    # plan d'inventaire, puis celles que ce passage associe au fil de l'eau.
+    # Un job terminé par l'USB a lié sa nouvelle entrée USB à son clip cloud :
+    # elle ne peut pas absorber un clip cloud voisin que le plan a séparé.
+    consommees = set(plan.consommees)
+    for job in jobs:
+        if job.cloud is not None and job.done and job.usb is not None:
+            plan_usb, clip_usb = job.usb
+            consommees.add(blink_registre.state_key(plan_usb.sync, clip_usb))
+
     for job in jobs_a_executer:
         clip = job.cloud
         sync = _HubCloud(clip.network_id)
+        cle_cloud = blink_registre.state_key(sync, clip, source="cloud")
         target = blink_models.target_path(output, clip, sync=sync, source="cloud")
         progression.commencer(target.name)
         resultat = "failed"
@@ -507,14 +535,15 @@ async def _telecharger_cloud(blink: Blink, args, output: Path, state: dict,
         try:
             # Revalidation au dernier moment : un autre chemin du même passage
             # peut avoir acquis le média depuis la phase d'inventaire.
-            _, entree_connue = blink_registre._trouver_entree(
-                state, sync, clip, source="cloud",
+            cle_connue, entree_connue = blink_registre._trouver_entree(
+                state, sync, clip, consumed=consommees, source="cloud",
             )
             if (
                 isinstance(entree_connue, dict)
                 and blink_registre._entree_acquise(output, entree_connue)
                 and not args.overwrite
             ):
+                consommees.add(cle_connue)
                 resultat = "skipped"
             elif (
                 entree_connue is None
@@ -528,6 +557,7 @@ async def _telecharger_cloud(blink: Blink, args, output: Path, state: dict,
                     source="cloud",
                 )
                 blink_registre.save_download_state(output, state)
+                consommees.add(cle_cloud)
                 adopted_execution += 1
                 resultat = "adopted"
             else:
@@ -540,6 +570,7 @@ async def _telecharger_cloud(blink: Blink, args, output: Path, state: dict,
                         source="cloud",
                     )
                     blink_registre.save_download_state(output, state)
+                    consommees.add(cle_cloud)
                     downloaded += 1
                     resultat = "downloaded"
                     runtime.notifier_nouveau_media(clip.name, target, "clip")

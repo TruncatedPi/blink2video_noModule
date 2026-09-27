@@ -577,17 +577,20 @@ class TestsReparationCloud(unittest.IsolatedAsyncioTestCase):
         slash = Clip(1, nom="A/B", device_id="camera-slash")
         underscore = Clip(2, nom="A_B", device_id="camera-underscore")
         appels = []
-        original = blink_models.rapprocher
+        # rapprocher_paires porte tous les rapprochements du plan cloud
+        # (rapprocher() lui délègue aussi) depuis l'audit du 26/09/2026.
+        original = blink_models.rapprocher_paires
 
-        def rapprocher_trace(locaux, cloud, tolerance=2):
+        def rapprocher_trace(locaux, cloud, tolerance=2, compatibles=None):
             appels.append(list(cloud))
-            return original(locaux, cloud, tolerance)
+            return original(locaux, cloud, tolerance, compatibles)
 
         with mock.patch.object(
             blink_models,
             "read_cloud_manifest",
             new=mock.AsyncMock(return_value=[slash, underscore]),
-        ), mock.patch.object(blink_models, "rapprocher", side_effect=rapprocher_trace), \
+        ), mock.patch.object(blink_models, "rapprocher_paires",
+                             side_effect=rapprocher_trace), \
              contextlib.redirect_stdout(io.StringIO()):
             await blink_engine.traiter_cloud(
                 object(),
@@ -657,6 +660,166 @@ class TestsReparationCloud(unittest.IsolatedAsyncioTestCase):
         registre = blink_registre.load_download_state(self.sortie)
         reseaux = {entree.get("network_id") for entree in registre["clips"].values()}
         self.assertEqual(reseaux, {"reseau-A", "reseau-B"})
+
+
+class TestsEvenementsCloudProches(unittest.IsolatedAsyncioTestCase):
+    """Audit du 26/09/2026, B01 : deux médias cloud aux identifiants distincts,
+    à une seconde d'écart, restent deux téléchargements. La tolérance de deux
+    secondes rapproche des sources différentes (USB et cloud) ou de vieilles
+    entrées sans identifiant ; elle ne fusionne jamais deux identifiants cloud,
+    et une entrée ne sert qu'une fois, comme dans le plan d'inventaire."""
+
+    async def asyncSetUp(self):
+        self.temporaire = tempfile.TemporaryDirectory(prefix="blink_b01_")
+        racine = Path(self.temporaire.name)
+        self.home = racine / "home"
+        self.sortie = racine / "clips"
+        self.home.mkdir()
+        self.sortie.mkdir()
+        self.ancien_home = os.environ.get("BLINK_HOME")
+        os.environ["BLINK_HOME"] = str(self.home)
+
+    async def asyncTearDown(self):
+        if self.ancien_home is None:
+            os.environ.pop("BLINK_HOME", None)
+        else:
+            os.environ["BLINK_HOME"] = self.ancien_home
+        self.temporaire.cleanup()
+
+    def _acquerir(self, clip, source):
+        """Entrée déjà rapatriée, fichier présent, comme après un passage."""
+        etat = blink_registre.load_download_state(self.sortie)
+        sync = (blink_engine._HubCloud(clip.network_id) if source == "cloud"
+                else Sync())
+        cible = blink_models.target_path(self.sortie, clip, sync=sync, source=source)
+        cible.parent.mkdir(parents=True, exist_ok=True)
+        cible.write_bytes(MP4_STRUCTUREL)
+        blink_registre.remember_download(
+            etat, sync, "", clip, self.sortie, cible, source=source)
+        blink_registre.save_download_state(self.sortie, etat)
+
+    async def _executer(self, manifeste):
+        appels = []
+
+        def telechargeur(clip):
+            async def telecharger(_blink, cible):
+                appels.append(clip.id)
+                cible.write_bytes(MP4_STRUCTUREL)
+                return True
+            return telecharger
+
+        for clip in manifeste:
+            clip.download_to = telechargeur(clip)
+        with mock.patch.object(
+            blink_models, "read_cloud_manifest",
+            new=mock.AsyncMock(return_value=list(manifeste)),
+        ), mock.patch.object(
+            blink_engine.md, "valid_mp4_complet", side_effect=blink_engine.md.valid_mp4
+        ), contextlib.redirect_stdout(io.StringIO()):
+            resultat = await blink_engine.traiter_cloud(
+                object(), arguments(self.sortie), []
+            )
+        etat = blink_registre.load_download_state(self.sortie)
+        identifiants = sorted(
+            entree.get("remote_id") for entree in etat["clips"].values()
+            if entree.get("source") == "cloud"
+        )
+        return resultat, appels, identifiants
+
+    async def test_B01_deux_clips_proches_du_meme_passage(self):
+        premier = Clip(1, instant=INSTANT + dt.timedelta(seconds=1))
+        second = Clip(2, instant=INSTANT + dt.timedelta(seconds=2))
+
+        resultat, appels, identifiants = await self._executer([premier, second])
+
+        self.assertEqual((resultat.downloaded, resultat.skipped), (2, 0))
+        self.assertEqual(appels, [1, 2])
+        self.assertEqual(identifiants, ["1", "2"])
+
+    async def test_B01_clip_voisin_d_un_media_deja_rapatrie(self):
+        ancien = Clip(1, instant=INSTANT)
+        self._acquerir(ancien, "cloud")
+        nouveau = Clip(2, instant=INSTANT + dt.timedelta(seconds=1))
+
+        resultat, appels, identifiants = await self._executer(
+            [Clip(1, instant=INSTANT), nouveau])
+
+        self.assertEqual((resultat.downloaded, resultat.skipped), (1, 1))
+        self.assertEqual(appels, [2])
+        self.assertEqual(identifiants, ["1", "2"])
+
+    async def test_B01_une_entree_usb_n_absorbe_qu_un_clip_cloud(self):
+        # Même événement vu par la clé USB (numéro de manifeste 5) et par le
+        # cloud (identifiant 1) ; le clip cloud 2, une seconde plus tard, est
+        # un autre événement que le plan d'inventaire classe inédit.
+        self._acquerir(Clip(5, instant=INSTANT), "usb")
+        meme_evenement = Clip(1, instant=INSTANT)
+        autre = Clip(2, instant=INSTANT + dt.timedelta(seconds=1))
+
+        resultat, appels, identifiants = await self._executer(
+            [meme_evenement, autre])
+
+        self.assertEqual((resultat.downloaded, resultat.skipped), (1, 1))
+        self.assertEqual(appels, [2])
+        self.assertEqual(identifiants, ["2"])
+
+    async def test_B01_vieille_entree_sans_identifiant_garde_la_tolerance(self):
+        # Registre d'avant l'identité v2 : pas d'identifiant distant, la
+        # proximité dans le temps reste le seul signal, comme aujourd'hui.
+        ancien = Clip(1, instant=INSTANT)
+        self._acquerir(ancien, "cloud")
+        etat = blink_registre.load_download_state(self.sortie)
+        for entree in etat["clips"].values():
+            entree["remote_id"] = ""
+        blink_registre.save_download_state(self.sortie, etat)
+
+        resultat, appels, _ = await self._executer(
+            [Clip(9, instant=INSTANT + dt.timedelta(seconds=1))])
+
+        self.assertEqual((resultat.downloaded, resultat.skipped), (0, 1))
+        self.assertEqual(appels, [])
+
+    async def test_B01_passage_combine_l_entree_usb_ne_prend_qu_un_clip_cloud(self):
+        # Le module USB rapatrie l'événement ; le cloud le connaît aussi
+        # (identifiant 1) et en a un autre une seconde plus tard
+        # (identifiant 2). Le plan lie l'USB au cloud 1 : la nouvelle entrée
+        # USB ne doit pas absorber le cloud 2 à sa revalidation.
+        usb = Clip(5, instant=INSTANT)
+        cloud_meme = Clip(1, instant=INSTANT)
+        cloud_autre = Clip(2, instant=INSTANT + dt.timedelta(seconds=1))
+        appels_cloud = []
+
+        async def telecharger_usb(_blink, _clip, cible, _ecraser):
+            cible.parent.mkdir(parents=True, exist_ok=True)
+            cible.write_bytes(MP4_STRUCTUREL)
+            return "downloaded"
+
+        def telechargeur(clip):
+            async def telecharger(_blink, cible):
+                appels_cloud.append(clip.id)
+                cible.write_bytes(MP4_STRUCTUREL)
+                return True
+            return telecharger
+
+        for clip in (cloud_meme, cloud_autre):
+            clip.download_to = telechargeur(clip)
+        with mock.patch.object(
+            blink_models, "read_local_manifest",
+            new=mock.AsyncMock(return_value=[usb]),
+        ), mock.patch.object(
+            blink_engine, "download_clip", side_effect=telecharger_usb,
+        ), mock.patch.object(
+            blink_models, "read_cloud_manifest",
+            new=mock.AsyncMock(return_value=[cloud_meme, cloud_autre]),
+        ), mock.patch.object(
+            blink_engine.md, "valid_mp4_complet", side_effect=blink_engine.md.valid_mp4
+        ), contextlib.redirect_stdout(io.StringIO()):
+            code = await blink_engine.un_passage(
+                object(), arguments(self.sortie, source="all"), [("Test", Sync())],
+            )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(appels_cloud, [2])
 
 
 class TestsMigrationV1(BacASable):

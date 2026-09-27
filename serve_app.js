@@ -789,14 +789,18 @@ async function heuresDePassage() {
   // c'est à vous de cliquer sur Actualiser. La liste ne se réorganise pas sous
   // les yeux de qui est en train de la lire.
   //
-  // Face à total_known (le vrai total du registre, jamais borné par le
+  // Face à total_known.clip (le vrai total du registre, jamais borné par le
   // filtre actif), jamais data.clips.length : celui-ci ne compte que ce que
   // le filtre courant affiche (une caméra, une période étroite…), pas tout
   // ce qui est connu. Comparer le total réel à un sous-ensemble filtré
   // annonçait des centaines de « nouveaux » clips qui n'avaient rien de
-  // nouveau (constaté en réel, 2026-08-27).
-  const arrives = (data && data.total_known !== undefined)
-    ? Math.max(0, (etat.clips || 0) - data.total_known) : 0;
+  // nouveau (constaté en réel, 2026-08-27). total_known est un objet par
+  // genre depuis le 2026-09-04 : le soustraire entier donnait NaN, et les
+  // nouveaux clips n'étaient plus jamais annoncés (audit du 26/09, B03).
+  // Avant le premier chargement de la galerie, rien à comparer.
+  const connus = data && data.total_known ? data.total_known.clip : undefined;
+  const arrives = typeof connus === "number"
+    ? Math.max(0, (etat.clips || 0) - connus) : 0;
   // Une seule heure, la plus récente des trois. Le détail du verbe le plus en
   // retard alourdissait la ligne pour un cas rare.
   const dates = ["watch", "download", "merge"].filter((cle) => vus[cle]);
@@ -2983,7 +2987,19 @@ function attendreFinConfigurationInitiale() {
   let delaiInitial = null;
   const attenteInitiale = setInterval(async () => {
     try {
-      const etat = await (await fetch("/api/status", { cache: "no-store" })).json();
+      const reponse = await fetch("/api/status", { cache: "no-store" });
+      if (reponse.status === 403) {
+        // Le nouveau serveur est là, avec son propre jeton : cette page ne
+        // peut plus l'interroger, et .json() échouait ici en silence jusqu'au
+        // délai d'échec (audit du 26/09/2026, B04). Une page fraîche obtient
+        // le nouveau jeton ; lancerParcoursInitial() n'y rouvre les réglages
+        // que si le serveur les exige encore.
+        clearInterval(attenteInitiale);
+        clearTimeout(delaiInitial);
+        location.reload();
+        return;
+      }
+      const etat = await reponse.json();
       if (etat.initial_setup === false) {
         clearInterval(attenteInitiale);
         clearTimeout(delaiInitial);
@@ -3142,6 +3158,19 @@ load();
   let continuer = true;
   if (parametres.get("login") === "1") continuer = await authenticate();
   if (continuer && parametres.get("setup") === "1") {
-    await ouvrirReglages(true);
+    // Une page rechargée avec ?setup=1 après la validation (jeton périmé au
+    // remplacement du serveur, voir lireJSON()) ne rouvre le dialogue
+    // obligatoire, sans Fermer ni Échap, que si le serveur l'exige encore
+    // (audit du 26/09/2026, B04). Dans le doute, il reste obligatoire.
+    let exige = true;
+    try {
+      const etat = await lireJSON(await fetch("/api/status", { cache: "no-store" }));
+      exige = etat.initial_setup !== false;
+    } catch (erreur) { /* statut illisible : garder le dialogue obligatoire */ }
+    if (exige) {
+      await ouvrirReglages(true);
+    } else {
+      history.replaceState(null, "", location.pathname);
+    }
   }
 })();

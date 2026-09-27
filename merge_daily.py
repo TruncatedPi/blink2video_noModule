@@ -114,7 +114,9 @@ LIBELLES = {
         "periode_assemblage": "Assemblage : {label} / {camera} / {jours} jour(s)",
         "echec_generique": "  Échec : {erreur}",
         "cree": "  Créé : {destination}",
-        "periode_supprimee": "Supprimé (période vide) : {cle}",
+        "periode_supprimee": "Supprimé (période vide) : {periode}",
+        "periode_protegee":
+            "Conservé tel quel : {periode} (une journée a perdu sa source et sa journalière)",
         "assemblage_deja_en_cours": "Assemblage déjà en cours ({erreur}). Rien à faire.",
         "normalisation_titre": "Normalisation : {total} clip(s) à encoder",
         "echec_normalisation": "    Échec : {erreur}",
@@ -215,7 +217,9 @@ LIBELLES = {
         "periode_assemblage": "Assembling: {label} / {camera} / {jours} day(s)",
         "echec_generique": "  Failed: {erreur}",
         "cree": "  Created: {destination}",
-        "periode_supprimee": "Deleted (empty period): {cle}",
+        "periode_supprimee": "Deleted (empty period): {periode}",
+        "periode_protegee":
+            "Kept as is: {periode} (a day lost both its source and its daily video)",
         "assemblage_deja_en_cours": "Assembly already in progress ({erreur}). Nothing to do.",
         "normalisation_titre": "Normalizing: {total} clip(s) to encode",
         "echec_normalisation": "    Failed: {erreur}",
@@ -1659,8 +1663,14 @@ def build_periods(
     force: bool,
     preset: str,
     crf: int,
+    proteges=frozenset(),
 ) -> tuple[int, int, int]:
-    """Assemble les vidéos journalières en agrégats hebdomadaires ou mensuels."""
+    """Assemble les vidéos journalières en agrégats hebdomadaires ou mensuels.
+
+    ``proteges`` : clés « caméra|période » dont une journée a perdu à la fois
+    ses clips bruts et sa journalière (voir periodes_a_proteger()). Leur
+    agrégat déjà assemblé la contient peut-être encore : il n'est ni
+    reconstruit à partir des autres jours, ni supprimé comme période vide."""
     dailies = collect_dailies(output_dir)
     # Pas de retour anticipé si dailies est vide : une caméra qui n'a plus
     # aucune journalière (tout exclu) doit quand même atteindre le nettoyage
@@ -1687,6 +1697,10 @@ def build_periods(
             destination = period_dir / camera / f"{label}_{camera}.mp4"
             key = f"{camera}|{label}"
             labels_attendus.add(key)
+            if key in proteges:
+                print(msg("periode_protegee", periode=key))
+                skipped += 1
+                continue
             fingerprint = period_fingerprint(parts)
 
             if (
@@ -1717,17 +1731,46 @@ def build_periods(
             print(msg("cree", destination=destination))
             built += 1
 
-    obsoletes = [key for key in state["groups"] if key not in labels_attendus]
+    obsoletes = [key for key in state["groups"]
+                 if key not in labels_attendus and key not in proteges]
     if obsoletes:
         for key in obsoletes:
             entree = state["groups"].pop(key)
             chemin = entree.get("path")
             if chemin:
                 (period_dir / chemin).unlink(missing_ok=True)
-            print(msg("periode_supprimee", cle=key))
+            print(msg("periode_supprimee", periode=key))
         save_json(state_path, state)
 
     return built, skipped, failed
+
+
+def periodes_a_proteger(indisponibles: set, output_dir: Path, period: str) -> set:
+    """Clés « caméra|période » que build_periods() ne doit ni reconstruire ni
+    supprimer : celles d'une journée dont un clip brut est indisponible ET
+    dont la journalière manque (audit du 26/09/2026, B02). La reconstruire à
+    partir des autres jours raccourcirait un agrégat qui contient peut-être
+    encore cette journée, parfois devenu sa seule copie.
+
+    Calculées sur toutes les journées, pas seulement celles d'un filtre
+    --date ou --camera : build_periods() reconstruit toutes les périodes,
+    quel que soit ce filtre. Une journée indisponible dont la journalière
+    existe encore ne protège rien, l'agrégat la reprend telle quelle."""
+    presentes = {
+        (dossier, jour)
+        for dossier, entrees in collect_dailies(output_dir).items()
+        for jour, _ in entrees
+    }
+    proteges = set()
+    for camera, jour_texte in indisponibles:
+        try:
+            jour = dt.date.fromisoformat(jour_texte)
+        except (TypeError, ValueError):
+            continue
+        dossier = safe_name(camera)
+        if (dossier, jour) not in presentes:
+            proteges.add(f"{dossier}|{period_label(jour, period)}")
+    return proteges
 
 
 COULEUR_FFMPEG_RE = re.compile(r"^#?[A-Za-z0-9]+(@(0(\.[0-9]+)?|1(\.0+)?))?$")
@@ -2150,6 +2193,7 @@ def _executer(args) -> int:
         p_built, p_skipped, p_failed = build_periods(
             ffmpeg, timezone, output_dir, period_dir, period,
             args.force, args.preset, args.crf,
+            proteges=periodes_a_proteger(indisponibles, output_dir, period),
         )
         failed += p_failed
         print(msg("periode_resume", label=label, built=p_built, skipped=p_skipped,

@@ -227,5 +227,27 @@ class CacheDureeTests(BacASable):
         self.assertEqual(resultat["clips"][0]["duration"], 2.0)
 
 
+class NombreClipsConnusTests(BacASable):
+    """Audit du 26/09/2026, B03 : la page compare le nombre de clips de
+    /api/passages au total_known["clip"] de /api/clips pour annoncer les
+    nouveaux. Les deux doivent compter pareil, entrées illisibles comprises :
+    sinon une seule entrée abîmée ferait annoncer un « nouveau » clip à
+    chaque sondage, et recharger la galerie sans fin."""
+
+    def test_passages_et_galerie_comptent_les_memes_clips(self) -> None:
+        entrees = {
+            "a.mp4": self.entree("a.mp4", "2026-09-20T12:00:00+00:00"),
+            "b.mp4": self.entree("b.mp4", "2026-01-01T12:00:00+00:00", excluded=True),
+            "sans-date": {"path": "c.mp4", "camera": "jardin"},
+            "date-illisible": {"path": "d.mp4", "created_at": "hier", "camera": "jardin"},
+        }
+        self.ecrire_registre(entrees)
+
+        galerie = serve.collect(self.paths, self.timezone, depuis=None)
+
+        self.assertEqual(serve.nombre_clips_connus(serve.read_entries(self.paths)), 2)
+        self.assertEqual(galerie["total_known"]["clip"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()
