@@ -21,12 +21,17 @@ voir maj.py) : ouvrir le menu n'interroge jamais GitHub soi-meme."""
 
 import os
 import subprocess
+import sys
 import threading
 import webbrowser
 
 import maj
 import raccourci_bureau
 import runtime
+
+# Cadence, en secondes, du thread qui rafraichit le menu (rafraichir(), dans
+# executer()).
+CADENCE_MENU = 5
 
 # Mêmes deux langues que la page web (serve.py, const I18N) ; runtime.lire_langue()
 # rapporte celle du dernier chargement de page (POST /api/lang à chaque setLang()),
@@ -51,6 +56,22 @@ def disponible() -> bool:
     except Exception:
         return False
     return True
+
+
+def _sur_le_fil_principal(fonction, plateforme=None):
+    """`fonction`, rendue sure a appeler depuis un autre thread que celui
+    d'icon.run(). Sous macOS, pystray passe l'appel tel quel a AppKit
+    (setMenu_ dans _update_menu, pystray/_darwin.py), qui n'admet les
+    changements d'interface que depuis le thread principal : macOS 27 tue
+    le processus des le premier rafraichissement du menu (SIGTRAP, code
+    133, issue #31). PyObjCTools.AppHelper.callAfter, la facon documentee
+    de PyObjC, confie l'appel a la boucle principale, celle qu'icon.run()
+    fait tourner. Ailleurs, l'appel direct tourne sans incident depuis la
+    0.8.9 (Windows, Linux)."""
+    if (plateforme or sys.platform) != "darwin":
+        return fonction
+    from PyObjCTools import AppHelper
+    return lambda: AppHelper.callAfter(fonction)
 
 
 def _relancer(sans_relance: bool) -> None:
@@ -178,10 +199,13 @@ def executer(port: int, arret: threading.Event, nettoyer) -> None:
         # l'icone (voir le commentaire dans menu()). Cinq secondes : assez
         # court pour paraitre immediat a l'ouverture du menu, assez long
         # pour rester un cout negligeable (reconstruire trois-quatre
-        # entrees de menu, pas un travail reseau).
-        while not arret.wait(timeout=5):
+        # entrees de menu, pas un travail reseau). Sous macOS, la
+        # reconstruction elle-meme a lieu sur le thread principal : voir
+        # _sur_le_fil_principal().
+        maj_du_menu = _sur_le_fil_principal(icon.update_menu)
+        while not arret.wait(timeout=CADENCE_MENU):
             try:
-                icon.update_menu()
+                maj_du_menu()
             except Exception:
                 pass
 
