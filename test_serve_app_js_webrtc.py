@@ -104,6 +104,7 @@ function fetch(url, options = {}) {
 class RTCPeerConnection extends EventTarget {
   constructor() { super(); this.connectionState = 'new'; this.iceConnectionState = 'new'; this.closed = 0; peers.push(this); }
   addTransceiver() {}
+  createDataChannel(label) { this.canal = new EventTarget(); this.canal.label = label; return this.canal; }
   async createOffer() { return {sdp: scenario === 'no_h264' ? 'v=0\r\na=rtpmap:120 VP8/90000\r\n' : 'v=0\r\na=rtpmap:102 H264/90000\r\n', type: 'offer'}; }
   async setLocalDescription(offer) { this.localDescription = offer; }
   async setRemoteDescription() {
@@ -111,10 +112,13 @@ class RTCPeerConnection extends EventTarget {
     const track = new EventTarget();
     this.ontrack({track, streams: [{}]});
     if (scenario === 'decoded' || scenario === 'ended' || scenario === 'retry_then_ended'
-        || scenario === 'continuous') {
+        || scenario === 'continuous' || scenario === 'server_closed') {
       video.readyState = 2; video.videoWidth = 1920;
       video.dispatchEvent(new Event('loadeddata'));
-      if (scenario !== 'decoded') setTimeout(() => track.dispatchEvent(new Event('ended')), 15);
+      // server_closed : ni piste terminée ni connexion fermée, seulement
+      // le canal « fin » que ferme le serveur.
+      if (scenario === 'server_closed') setTimeout(() => this.canal.dispatchEvent(new Event('close')), 15);
+      else if (scenario !== 'decoded') setTimeout(() => track.dispatchEvent(new Event('ended')), 15);
     }
     if (scenario === 'ice_failed') {
       this.connectionState = 'failed';
@@ -222,9 +226,15 @@ class RTCPeerConnection extends EventTarget {
     let error;
     try { result.value = await promise; } catch (e) { error = e; }
     result.elapsed = performance.now() - started;
-    if (scenario === 'decoded' || scenario === 'ended') {
+    if (scenario === 'decoded' || scenario === 'ended' || scenario === 'server_closed') {
       assert.equal(displayed, 1);
       assert.equal(result.value, true);
+      if (scenario === 'server_closed') {
+        assert.equal(peers[0].canal.label, 'fin');
+        // Sous les 100 ms de WEBRTC_DUREE_APRES_LECTURE_MS du banc : c'est bien
+        // le canal qui a terminé la session, pas la minuterie de la page.
+        assert.ok(result.elapsed < 80, `fin vue après ${result.elapsed} ms`);
+      }
       assert.ok(result.elapsed >= (scenario === 'decoded' ? 80 : 10));
     } else {
       assert.ok(error);
@@ -247,6 +257,9 @@ class RTCPeerConnection extends EventTarget {
                                 capture_output=True, text=True, encoding="utf-8", timeout=60)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(json.loads(result.stdout)["ok"])
+
+    def test_fin_de_session_serveur_vue_tout_de_suite_par_le_canal(self):
+        self.scenario("server_closed")
 
     def test_direct_continu_enchaine_les_sessions_au_dela_du_budget(self):
         self.scenario("continuous")

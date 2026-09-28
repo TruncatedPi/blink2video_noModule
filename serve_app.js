@@ -1750,6 +1750,14 @@ async function tenterWebRTC(name, video, signal, essai, surLecture = () => {}) {
 
   try {
     pc.addTransceiver("video", { direction: "recvonly" });
+    // Canal de données sans autre usage que sa fermeture : quand le serveur
+    // ferme la session (Blink a coupé, plafond, flux silencieux), le
+    // navigateur le voit se fermer aussitôt, alors que la connexion ne passe
+    // « disconnected » qu'au bout de plusieurs secondes, suivies de
+    // WEBRTC_DELAI_DECONNEXION_MS. La fin est constatée tout de suite, et
+    // « Direct continu » relance sans attendre (vingt secondes gagnées,
+    // mesuré le 2026-09-28).
+    pc.createDataChannel("fin").addEventListener("close", () => finir());
     const offre = await operationOuAbandon(() => pc.createOffer(), controller.signal);
     // Vérifier l'offre réelle avant de réveiller la caméra. La présence
     // de RTCPeerConnection seule ne garantit pas le décodeur H.264.
