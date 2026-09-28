@@ -29,6 +29,12 @@ try:
     import pystray  # noqa: E402
 except ImportError:
     pystray = None
+try:
+    # Menu, rafraîchissement et fil principal vivent dans la bibliothèque
+    # commune depuis qu'elle est née de tray.py : c'est elle qu'on patche.
+    from nico579_commons import tray as commun  # noqa: E402
+except ImportError:
+    commun = None
 import tray  # noqa: E402
 
 
@@ -47,6 +53,7 @@ def _faux_pyobjctools(confies, signal=None):
     return {"PyObjCTools": paquet, "PyObjCTools.AppHelper": apphelper}
 
 
+@unittest.skipIf(commun is None, "nico579_commons indisponible dans cet environnement")
 class SurLeFilPrincipalTests(unittest.TestCase):
     def test_macos_confie_l_appel_a_la_boucle_principale(self) -> None:
         confies, faits = [], []
@@ -55,7 +62,7 @@ class SurLeFilPrincipalTests(unittest.TestCase):
             faits.append(threading.current_thread().name)
 
         with mock.patch.dict(sys.modules, _faux_pyobjctools(confies)):
-            tray._sur_le_fil_principal(fonction, "darwin")()
+            commun.sur_le_fil_principal(fonction, "darwin")()
 
         self.assertEqual(faits, [], "appel fait directement, hors de la boucle principale")
         self.assertEqual(confies, [fonction])
@@ -66,7 +73,7 @@ class SurLeFilPrincipalTests(unittest.TestCase):
 
         for plateforme in ("win32", "linux"):
             with self.subTest(plateforme=plateforme):
-                self.assertIs(tray._sur_le_fil_principal(fonction, plateforme), fonction)
+                self.assertIs(commun.sur_le_fil_principal(fonction, plateforme), fonction)
 
 
 @unittest.skipUnless(tray.disponible(), "pystray indisponible dans cet environnement")
@@ -92,12 +99,12 @@ class RafraichissementDuMenuTests(unittest.TestCase):
             def run(self):
                 agi.wait(timeout=5)
 
-        vrai = tray._sur_le_fil_principal
+        vrai = commun.sur_le_fil_principal
         arret = threading.Event()
         try:
             with mock.patch.object(pystray, "Icon", FauxIcon), \
-                    mock.patch.object(tray, "CADENCE_MENU", 0.01), \
-                    mock.patch.object(tray, "_sur_le_fil_principal",
+                    mock.patch.object(commun, "CADENCE_MENU", 0.01), \
+                    mock.patch.object(commun, "sur_le_fil_principal",
                                       lambda fonction: vrai(fonction, plateforme)), \
                     mock.patch.dict(sys.modules, _faux_pyobjctools(confies, agi)):
                 tray.executer(8765, arret, lambda: None)

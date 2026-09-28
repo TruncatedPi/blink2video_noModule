@@ -1,7 +1,12 @@
 -r requirements.in
 
 # Uniquement pour construire le bundle (build.py, profil ordinaire) : jamais
-# nécessaires au bundle une fois figé, PyInstaller les laisse hors du .exe.
+# nécessaire au bundle une fois figé, PyInstaller le laisse hors du .exe.
 pyinstaller
+
+# Icône de zone de notification (tray.py) : embarquée dans le bundle,
+# facultative depuis les sources. Menu commun aux quatre applications dans
+# nico579-commons ; Pillow sert aussi à convertir l'icône de l'exécutable.
 Pillow
 pystray
+nico579-commons

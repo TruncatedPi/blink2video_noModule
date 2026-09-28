@@ -1,27 +1,34 @@
 """Icone de zone de notification pour l'instance « start » : ouvrir,
-redemarrer, arreter sans repasser par le terminal ni la page web.
+mettre a jour, redemarrer, arreter et creer un raccourci sans repasser par
+le terminal ni la page web.
 
-pystray est la bibliotheque standard Python pour ca, cross-plateforme (choisit
-automatiquement win32 sous Windows, AppKit sous macOS, AppIndicator/GTK sous
-Linux). Sans serveur graphique (SSH, machine headless, conteneur) son import
-echoue proprement : on continue alors sans icone, jamais en erreur bloquante,
-une machine sans ecran doit continuer a fonctionner. Meme esprit que
-`resource_dir()` ou `app_dir()` : degrader plutot que planter.
+Le menu commun aux quatre applications (blink2video, lidar2map, watch2notif,
+gpxsolar), son rafraichissement sur le fil principal sous macOS (issue #31)
+et le fil qui porte Redemarrer/Arreter/Mettre a jour jusqu'a leur terme
+(course du 2026-09-03 : « Redemarrer » arretait sans relancer) viennent de
+nico579_commons.tray, nee de ce fichier. Ne restent ici que les actions
+propres a blink2video.
 
-Redemarrer/Arreter passent par « blink2video restart », deja le mecanisme du
-bouton Stop/Appliquer de la page de reglages (serve.py, /api/stop et
-/api/reglages) : la meme commande detachee, pas une deuxieme facon de tuer
-l'instance en cours.
+pystray (et donc nico579_commons.tray) choisit win32 sous Windows, AppKit
+sous macOS, AppIndicator/GTK sous Linux. Sans serveur graphique (SSH,
+machine headless, conteneur) ou sans ces paquets (execution depuis les
+sources, ou ils ne sont pas requis), on continue sans icone, jamais en
+erreur bloquante : degrader plutot que planter, comme resource_dir() ou
+app_dir().
 
-« Mettre a jour », quand une version plus recente existe, passe de meme par
-« blink2video update », le mecanisme du bouton de mise a jour de la page web
+Redemarrer/Arreter passent par nettoyer(), fourni par blink_cli.py, qui
+arrete directement les verbes lances ; Redemarrer relance ensuite par
+« blink2video restart », le mecanisme du bouton de la page de reglages
+(serve.py, /api/redemarrer).
+
+« Mettre a jour », quand une version plus recente existe, passe par
+« blink2video update », le mecanisme du bouton de mise a jour de la page
 (serve.py, /api/update). `maj.disponible(reseau=False)` ne lit que le cache
-deja entretenu par le thread de fond de serve.py (six heures de fraicheur,
-voir maj.py) : ouvrir le menu n'interroge jamais GitHub soi-meme."""
+deja entretenu par le thread de fond de serve.py : ouvrir le menu
+n'interroge jamais GitHub soi-meme."""
 
 import os
 import subprocess
-import sys
 import threading
 import webbrowser
 
@@ -29,49 +36,16 @@ import maj
 import raccourci_bureau
 import runtime
 
-# Cadence, en secondes, du thread qui rafraichit le menu (rafraichir(), dans
-# executer()).
-CADENCE_MENU = 5
-
-# Mêmes deux langues que la page web (serve.py, const I18N) ; runtime.lire_langue()
-# rapporte celle du dernier chargement de page (POST /api/lang à chaque setLang()),
-# pas la locale du système : le menu doit suivre la page, pas l'OS.
-LIBELLES = {
-    "fr": {"ouvrir": "Ouvrir", "maj": "Mettre à jour vers {version}",
-           "redemarrer": "Redémarrer", "arreter": "Arrêter",
-           "raccourci": "Créer un raccourci sur le Bureau"},
-    "en": {"ouvrir": "Open", "maj": "Update to {version}",
-           "redemarrer": "Restart", "arreter": "Stop",
-           "raccourci": "Create a Desktop shortcut"},
-}
-
 
 def disponible() -> bool:
-    """Faux si pystray ou son image ne peuvent pas etre charges ici :
-    bibliotheque absente, ou aucun backend de zone de notification (Linux
-    sans AppIndicator/GTK, session sans affichage)."""
+    """Faux si nico579_commons, pystray ou Pillow ne se chargent pas ici :
+    paquets absents (sources), ou aucun backend de zone de notification
+    (Linux sans AppIndicator/GTK, session sans affichage)."""
     try:
-        import pystray  # noqa: F401
-        from PIL import Image  # noqa: F401
+        from nico579_commons import tray as commun
     except Exception:
         return False
-    return True
-
-
-def _sur_le_fil_principal(fonction, plateforme=None):
-    """`fonction`, rendue sure a appeler depuis un autre thread que celui
-    d'icon.run(). Sous macOS, pystray passe l'appel tel quel a AppKit
-    (setMenu_ dans _update_menu, pystray/_darwin.py), qui n'admet les
-    changements d'interface que depuis le thread principal : macOS 27 tue
-    le processus des le premier rafraichissement du menu (SIGTRAP, code
-    133, issue #31). PyObjCTools.AppHelper.callAfter, la facon documentee
-    de PyObjC, confie l'appel a la boucle principale, celle qu'icon.run()
-    fait tourner. Ailleurs, l'appel direct tourne sans incident depuis la
-    0.8.9 (Windows, Linux)."""
-    if (plateforme or sys.platform) != "darwin":
-        return fonction
-    from PyObjCTools import AppHelper
-    return lambda: AppHelper.callAfter(fonction)
+    return commun.disponible()
 
 
 def _relancer(sans_relance: bool) -> None:
@@ -82,141 +56,49 @@ def _relancer(sans_relance: bool) -> None:
         stderr=subprocess.STDOUT, start_new_session=(os.name != "nt"))
 
 
+def _mettre_a_jour() -> None:
+    # Détaché : ce processus fait partie de ce que la mise à jour va arrêter.
+    runtime.demarrer(
+        runtime.self_command("update"), cwd=str(runtime.app_dir()),
+        stdin=subprocess.DEVNULL,
+        stdout=(runtime.app_dir() / "maj.log").open("ab"),
+        stderr=subprocess.STDOUT, start_new_session=(os.name != "nt"))
+
+
+def _version_disponible():
+    return (maj.disponible(reseau=False) or {}).get("version")
+
+
 def executer(port: int, arret: threading.Event, nettoyer) -> None:
     """Bloque sur la boucle de l'icone, thread principal exige sous macOS.
 
     `arret` : leve par l'appelant quand un verbe surveille meurt de
-    lui-meme (crash) ; un thread interne referme alors l'icone pour rendre
-    la main au nettoyage habituel.
+    lui-meme (crash) ; l'icone se referme alors pour rendre la main au
+    nettoyage habituel.
 
     `nettoyer` : arrete directement, dans ce meme processus, les verbes que
-    l'appelant a lances (voir nettoyer_lances(), blink_cli.py). Redemarrer/
-    Arreter passaient avant uniquement par un « blink2video restart »
-    detache (_relancer) : constate en reel sur Windows 7, l'icone pouvait
-    disparaitre (icon.stop() rendant la main) sans que rien ne s'arrete
-    vraiment derriere, sans qu'on ait pu etablir pourquoi le second
-    processus detache n'aboutissait pas toujours. Appeler nettoyer()
-    directement, en synchrone, ne depend plus de ce second processus - la
-    seule chose garantie de marcher est un Ctrl+C sur le processus lui-meme
-    (bug 6, revue du 27/08), donc ce menu doit produire le meme effet.
-
-    thread_de_sortie (plus bas) : redemarrer()/arreter() lancent leur
-    travail sur un thread demon separe du thread de la pompe de messages
-    (cf. juste en dessous, pourquoi), mais rien n'attendait ce thread avant
-    qu'icon.run() ne rende la main - blink_cli.py (l'appelant) pouvait
-    alors terminer son propre nettoyage (redondant mais rapide une fois
-    les workers deja arretes par le premier) et laisser le processus
-    sortir, tuant net ce thread demon avant qu'il n'ait atteint
-    _relancer() (un thread demon ne survit jamais a la fin du thread
-    principal). « Redemarrer » arretait alors tout sans jamais rien
-    relancer - constate en reel, 2026-09-03, et deja souleve sans
-    solution par le commentaire ci-dessus lui-meme ("sans qu'on ait pu
-    etablir pourquoi le second processus detache n'aboutissait pas
-    toujours"). icon.run() attend desormais ce thread avant de rendre la
-    main, borne au meme delai que nettoyer() s'accorde a elle-meme
-    (15+5s) plus une marge : jamais moins de temps que nettoyer() elle-
-    meme ne s'autorise deja."""
-    import pystray
-    from PIL import Image
+    l'appelant a lances (voir nettoyer_lances(), blink_cli.py). Redemarrer
+    et Arreter l'appellent en synchrone plutot que de s'en remettre a un
+    « blink2video restart » detache : constate en reel sur Windows 7, l'icone
+    pouvait disparaitre sans que rien ne s'arrete derriere (bug 6, revue du
+    27/08). executer() ne rend la main qu'une fois ce travail fini (voir
+    nico579_commons.tray.Tray.executer)."""
+    from nico579_commons import tray as commun
 
     adresse = f"http://127.0.0.1:{port}/"
-    thread_de_sortie = None
 
-    def ouvrir(icon=None, item=None):
-        webbrowser.open(adresse)
+    def redemarrer():
+        nettoyer()
+        _relancer(sans_relance=False)
 
-    def redemarrer(icon, item):
-        nonlocal thread_de_sortie
-        # nettoyer() en tâche de fond, pas ici : ce callback tourne sur le
-        # même thread que la pompe de messages Windows de l'icône, et
-        # nettoyer() peut bloquer jusqu'à 15 s (délai de grâce coopératif).
-        # Geler ce thread empêchait icon.stop() d'être traité à temps,
-        # laissant l'icône elle-même en vie une fois tout le reste arrêté
-        # (constaté en réel : « il reste juste le systray »). _relancer()
-        # doit néanmoins attendre la fin de nettoyer() - sans quoi le
-        # nouveau « start » pourrait tenter de se lier au port avant que
-        # l'ancien serve ne l'ait libéré.
-        def suite():
-            nettoyer()
-            _relancer(sans_relance=False)
-
-        thread_de_sortie = threading.Thread(target=suite, daemon=True)
-        thread_de_sortie.start()
-        icon.stop()
-
-    def arreter(icon, item):
-        nonlocal thread_de_sortie
-        thread_de_sortie = threading.Thread(target=nettoyer, daemon=True)
-        thread_de_sortie.start()
-        icon.stop()
-
-    def creer_raccourci(icon, item):
-        raccourci_bureau.creer()
-
-    def mettre_a_jour(icon, item):
-        runtime.demarrer(
-            runtime.self_command("update"), cwd=str(runtime.app_dir()),
-            stdin=subprocess.DEVNULL,
-            stdout=(runtime.app_dir() / "maj.log").open("ab"),
-            stderr=subprocess.STDOUT, start_new_session=(os.name != "nt"))
-        icon.stop()
-
-    def menu():
-        # Un appelable plutot qu'une liste figee : necessaire pour lire
-        # runtime.lire_langue()/maj.disponible() a chaque reconstruction.
-        # Ca ne suffit pourtant pas seul : le backend win32 de pystray ne
-        # rappelle PAS ce generateur a chaque clic droit, il reutilise le
-        # HMENU construit une fois pour toutes au demarrage (verifie dans
-        # pystray/_win32.py, _on_notify utilise self._menu_handle, jamais
-        # regenere sans un appel explicite a icon.update_menu() - documente
-        # dans Icon.update_menu() elle-meme : necessaire des que les
-        # changements sont "triggered by actions other than the menu item
-        # activation callbacks", exactement notre cas). D'ou le thread de
-        # rafraichissement plus bas, qui appelle update_menu() en boucle.
-        mots = LIBELLES[runtime.lire_langue()]
-        yield pystray.MenuItem(mots["ouvrir"], ouvrir, default=True)
-        neuve = maj.disponible(reseau=False)
-        if neuve:
-            yield pystray.MenuItem(mots["maj"].format(version=neuve["version"]),
-                                   mettre_a_jour)
-        yield pystray.MenuItem(mots["redemarrer"], redemarrer)
-        yield pystray.MenuItem(mots["arreter"], arreter)
-        yield pystray.MenuItem(mots["raccourci"], creer_raccourci)
-
-    icone_fichier = runtime.resource_dir() / "assets" / "blink2video.ico"
-    image = Image.open(str(icone_fichier))
-
-    icon = pystray.Icon("blink2video", image, "blink2video", menu=pystray.Menu(menu))
-
-    def veille():
-        arret.wait()
-        icon.stop()
-
-    def rafraichir():
-        # icon.update_menu() reconstruit le HMENU depuis menu() : sans ce
-        # thread, changer de langue ou voir paraitre une mise a jour
-        # n'apparaitrait dans le menu qu'apres un redemarrage complet de
-        # l'icone (voir le commentaire dans menu()). Cinq secondes : assez
-        # court pour paraitre immediat a l'ouverture du menu, assez long
-        # pour rester un cout negligeable (reconstruire trois-quatre
-        # entrees de menu, pas un travail reseau). Sous macOS, la
-        # reconstruction elle-meme a lieu sur le thread principal : voir
-        # _sur_le_fil_principal().
-        maj_du_menu = _sur_le_fil_principal(icon.update_menu)
-        while not arret.wait(timeout=CADENCE_MENU):
-            try:
-                maj_du_menu()
-            except Exception:
-                pass
-
-    threading.Thread(target=veille, daemon=True).start()
-    threading.Thread(target=rafraichir, daemon=True).start()
-    icon.run()
-    # Voir la note plus haut : sans ceci, l'appelant peut sortir avant que
-    # thread_de_sortie (nettoyer(), et pour redemarrer() _relancer()
-    # ensuite) n'ait fini, le tuant net avant _relancer(). 30s : au-dela
-    # des 15+5s que nettoyer() s'accorde deja a elle-meme, jamais le
-    # facteur limitant sauf si nettoyer() elle-meme est deja bloquee bien
-    # au-dela de son propre delai - situation deja anormale par ailleurs.
-    if thread_de_sortie is not None:
-        thread_de_sortie.join(timeout=30)
+    actions = commun.Actions(
+        ouvrir=lambda: webbrowser.open(adresse),
+        redemarrer=redemarrer,
+        arreter=nettoyer,
+        version_disponible=_version_disponible,
+        mettre_a_jour=_mettre_a_jour,
+        creer_raccourci=raccourci_bureau.creer,
+        langue=runtime.lire_langue,
+    )
+    icone = runtime.resource_dir() / "assets" / "blink2video.ico"
+    commun.Tray("blink2video", icone, actions, arret=arret).executer()
