@@ -113,6 +113,9 @@ LIBELLES = {
         "maj_precedente_non_finalisee":
             "Mise à jour précédente non finalisée : sauvegardes et préparation conservées.",
         "relance": "Relance : {commande}",
+        "hors_du_service":
+            "Sous le service systemd : la suite se poursuit hors de l'unité, "
+            "pour survivre à son arrêt.",
         "racine_controle_illisible": "Mise à jour interrompue : racine de contrôle illisible.",
         "racines_controle_multiples":
             "Mise à jour interrompue : plusieurs racines de contrôle possibles.",
@@ -213,6 +216,9 @@ LIBELLES = {
         "maj_precedente_non_finalisee":
             "Previous update not finalized: backups and preparation kept.",
         "relance": "Relaunching: {commande}",
+        "hors_du_service":
+            "Under the systemd service: continuing outside the unit, "
+            "to survive its stop.",
         "racine_controle_illisible": "Update interrupted: control root unreadable.",
         "racines_controle_multiples":
             "Update interrupted: multiple possible control roots.",
@@ -1096,6 +1102,16 @@ def finaliser(cible: Path) -> int:
     vide avec un arrêt réussi. Si plusieurs racines portent des fiches,
     refuser de deviner quel ensemble arrêter.
     """
+    # Sous le service systemd, ce processus fait partie de ce que « stop »
+    # va faire tomber : la suite se poursuit hors de l'unité (issue #35).
+    # Ici plutôt qu'au lancement du finaliseur, parce que c'est l'ancienne
+    # version qui le lance : une mise à jour depuis une version qui ne sait
+    # pas sortir du service en profite ainsi quand même.
+    import autostart
+    if autostart.sortir_du_service(
+            runtime.self_command("update", "--finaliser", str(cible))):
+        print(msg("hors_du_service"), flush=True)
+        return 0
     if os.environ.get("BLINK_CONTROL_HOME"):
         return _finaliser(cible)
     installe = cible.resolve()
@@ -1197,14 +1213,27 @@ def _finaliser(cible: Path) -> int:
             time.sleep(2)
         else:
             print(msg("version_precedente_intacte"), flush=True)
-            for verbes in compositions:
-                _relancer(installe, verbes)
+            _relancer_tout(installe, compositions)
             return 1
 
     print(msg("installe_dans", installe=installe), flush=True)
+    _relancer_tout(installe, compositions)
+    return 0
+
+
+def _relancer_tout(installe: Path, compositions: list) -> None:
+    """Relance ce qui tournait. Sorti d'une unité systemd pour survivre à
+    son arrêt (autostart.sortir_du_service), c'est elle qu'on relance :
+    blink2video retrouve la garde de son service, plutôt que de tourner
+    détaché dans le scope transitoire. Sinon, chaque composition, comme
+    avant."""
+    import autostart
+    unite = autostart.relancer_service()
+    if unite:
+        print(msg("relance", commande=f"systemctl --user start {unite}"), flush=True)
+        return
     for verbes in compositions:
         _relancer(installe, verbes)
-    return 0
 
 
 def _depuis_les_sources() -> int:

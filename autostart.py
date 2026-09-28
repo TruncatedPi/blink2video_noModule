@@ -457,6 +457,85 @@ def argument_systemd(valeur: str) -> str:
     return f'"{echappe}"'
 
 
+# Sous l'unité posée par « autostart on », tout processus lancé par blink2video
+# reste dans le cgroup de l'unité, quel que soit son parent : start_new_session
+# change de session, pas de cgroup. Quand « stop » fait sortir le processus
+# principal, systemd clôt l'unité et tue ce qui reste dans ce cgroup, y compris
+# ce qui devait remplacer les fichiers d'une mise à jour ou relancer
+# blink2video après Appliquer ; et comme la sortie se fait avec le code 0,
+# Restart=on-failure ne relance rien (issue #35, pendant Linux de l'issue #31).
+UNITE_ENV = "BLINK_UNITE_SYSTEMD"
+
+
+def unite_systemd(cgroup: Path = Path("/proc/self/cgroup")) -> str:
+    """Unité blink2video (« blink2video-start.service ») dont ce processus
+    fait partie, ou "" : hors Linux, hors d'une telle unité, ou cgroup
+    illisible. Lit le cgroup v2 (« 0::/… ») comme les lignes du v1."""
+    if not sys.platform.startswith("linux"):
+        return ""
+    try:
+        texte = cgroup.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    for ligne in texte.splitlines():
+        for segment in reversed(ligne.rsplit(":", 1)[-1].split("/")):
+            if segment.startswith(NOM + "-") and segment.endswith(".service"):
+                return segment
+    return ""
+
+
+def sortir_du_service(commande: list, environ=None) -> bool:
+    """Relance ``commande`` hors de l'unité blink2video dont ce processus
+    fait partie, et rend True : l'appelant s'arrête alors là, la suite
+    s'exécute dans le processus relancé. Rend False hors d'une telle unité,
+    une fois déjà sorti, ou si systemd-run ne répond pas : l'appelant
+    continue alors comme avant.
+
+    systemd-run --user --scope place la commande dans une unité « scope »
+    transitoire, son propre cgroup, que la fin du service n'atteint pas. Un
+    premier essai à vide vérifie que la sortie fonctionne vraiment : sans
+    lui, un systemd-run qui échouerait après notre départ ne laisserait plus
+    personne pour finir le travail. Le nom de l'unité quittée voyage dans
+    BLINK_UNITE_SYSTEMD, pour relancer_service()."""
+    env = dict(os.environ if environ is None else environ)
+    unite = unite_systemd()
+    if not unite or env.get(UNITE_ENV):
+        return False
+    env = env_systemctl(env)
+    portee = ["systemd-run", "--user", "--scope", "--quiet", "--"]
+    try:
+        essai = runtime.lancer([*portee, "true"], check=False, env=env,
+                               stdin=subprocess.DEVNULL, capture_output=True,
+                               timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if essai.returncode != 0:
+        return False
+    env[UNITE_ENV] = unite
+    runtime.demarrer([*portee, *commande], env=env, stdin=subprocess.DEVNULL)
+    return True
+
+
+def relancer_service(environ=None) -> str:
+    """Relance par systemd l'unité quittée par sortir_du_service() : start
+    reprend ainsi sous la garde de son service, plutôt que détaché dans le
+    scope transitoire, et la prochaine ouverture de session trouve l'unité
+    dans l'état attendu. Rend le nom de l'unité si systemctl l'a acceptée,
+    "" sinon : l'appelant relance alors comme avant."""
+    env = dict(os.environ if environ is None else environ)
+    unite = env.pop(UNITE_ENV, "")
+    if not unite:
+        return ""
+    try:
+        resultat = runtime.lancer(["systemctl", "--user", "start", unite],
+                                  check=False, env=env_systemctl(env),
+                                  stdin=subprocess.DEVNULL, capture_output=True,
+                                  timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return unite if resultat.returncode == 0 else ""
+
+
 def _linux(etat: str, simulation: bool, quoi: tuple = DEFAUT) -> int:
     dossier = Path.home() / ".config/systemd/user"
     if etat == "status":

@@ -627,6 +627,14 @@ def redemarrer(arguments: list = ()) -> int:
                          start_new_session=(sys.platform != "win32"))
         return 0
 
+    # Sous le service systemd, se détacher ne suffit pas : ce processus reste
+    # dans le cgroup de l'unité, que la fin du processus principal fait tomber
+    # entier, avant toute relance (issue #35). La suite se poursuit hors de
+    # l'unité, et la relance passe par systemd.
+    import autostart
+    if autostart.sortir_du_service(runtime.self_command("restart", *arguments)):
+        return 0
+
     try:
         # Un seul finaliseur à la fois. attente=0 est volontaire : deux clics
         # rapprochés ne doivent pas mettre le second en file puis lui faire
@@ -649,7 +657,7 @@ def redemarrer(arguments: list = ()) -> int:
                 time.sleep(1)
             if instances:
                 return 1
-            if not args.sans_relance:
+            if not args.sans_relance and not autostart.relancer_service():
                 runtime.demarrer(runtime.self_command("start"), cwd=str(installe),
                                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                  stderr=subprocess.DEVNULL,

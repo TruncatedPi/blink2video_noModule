@@ -4615,10 +4615,11 @@ __CSS__
   <div id="panelGeneral" class="panelReglages">
     <label id="autostartLabel"
            data-i18n-title="reglages.autostart.title"
-           title="Démarre le serveur web et le traitement des clips à l'ouverture
-                   de session, en arrière-plan — n'ouvre pas cette page toute seule">
-      <input type="checkbox" id="autostart"> <span data-i18n="reglages.autostart">Démarrage de la surveillance à
-      l'ouverture de session</span>
+           title="Démarre le serveur web et le traitement des clips en arrière-plan,
+                   à l'ouverture de session (au démarrage de la machine pour un service
+                   Linux avec lingering) ; n'ouvre pas cette page toute seule">
+      <input type="checkbox" id="autostart"> <span data-i18n="reglages.autostart">Démarrage automatique
+      de la surveillance</span>
     </label>
     <label id="autoLabel" data-i18n-title="reglages.auto.title" title="Recharger la liste dès que des clips arrivent">
       <input type="checkbox" id="auto"> <span data-i18n="reglages.auto">Actualisation automatique de la page</span>
