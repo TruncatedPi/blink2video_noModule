@@ -257,9 +257,13 @@ def msg(cle: str, **valeurs) -> str:
 
 DEPOT = "nico579/blink2video"
 CACHE = Path(".blink_maj.json")
-# Six heures : une version ne sort pas plus souvent, et l'interface ne doit pas
-# interroger GitHub à chaque ouverture de page.
-FRAICHEUR = 6 * 3600
+# Une heure. Six heures faisaient attendre une version publiée jusqu'à une
+# demi-journée (issue #35) ; une question par heure reste loin des soixante
+# que l'API de GitHub accorde par heure et par adresse sans compte. Pour ne
+# pas attendre du tout, le bouton « Vérifier les mises à jour » des réglages
+# (verifier_maintenant). L'interface, elle, lit le cache sans jamais
+# interroger GitHub à l'ouverture d'une page.
+FRAICHEUR = 3600
 DOSSIER_TRAVAIL = "update"
 MARQUEUR_TRAVAIL = ".blink2video-update"
 # Avant 0.10.5, les mises à jour étaient préparées à côté de l'installation.
@@ -432,6 +436,28 @@ def disponible(force: bool = False, reseau: bool = True) -> dict:
         return {}
     return {"version": version, "page": cache.get("page"),
             "archive": cache.get("archive") or {}}
+
+
+def _date_verification() -> float:
+    """Heure de la dernière réponse de GitHub gardée dans le cache, 0 sinon."""
+    try:
+        cache = json.loads((runtime.app_dir() / CACHE).read_text(encoding="utf-8"))
+        return float(cache.get("verifie") or 0)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return 0.0
+
+
+def verifier_maintenant() -> tuple:
+    """Pour le bouton « Vérifier les mises à jour » des réglages : interroge
+    GitHub sans attendre que le cache vieillisse (issue #35). Rend la version
+    plus récente, ou {}, et si GitHub a bien répondu : la page distingue
+    ainsi « déjà à jour » de « GitHub injoignable », que disponible() confond
+    exprès pour le fil de fond. L'édition Windows 7 n'en propose aucune."""
+    if runtime.build_windows7():
+        return {}, True
+    avant = _date_verification()
+    neuve = disponible(force=True)
+    return neuve, _date_verification() > avant
 
 
 # --------------------------------------------------------------- installation

@@ -137,6 +137,12 @@ const I18N = {
     "reglages.apply": "Appliquer", "reglages.restarting": "Redémarrage…",
     "reglages.restart": "Redémarrer",
     "reglages.restart.hint": "Redémarre sans rien changer aux réglages, par exemple pour reprendre une mise à jour déjà en place.",
+    "reglages.checkUpdates": "Vérifier les mises à jour",
+    "reglages.checkUpdates.hint": "Demande tout de suite à GitHub si une version plus récente est publiée. Sans ce bouton, blink2video vérifie de lui-même toutes les heures.",
+    "reglages.checkUpdates.running": "Vérification…",
+    "reglages.checkUpdates.none": "blink2video {version} est à jour.",
+    "reglages.checkUpdates.found": "La version {version} est publiée : le bouton « Installer {version} » est en haut de la page.",
+    "reglages.checkUpdates.offline": "GitHub n'a pas répondu. Réessayez dans un moment.",
     "reglages.restarting.settings": "Redémarrage avec les nouveaux réglages…",
     "reglages.portchange": "Port changé : redirection vers {url} dès l'arrêt confirmé…",
     "reglages.stop": "Arrêter la surveillance des caméras", "reglages.close": "Fermer",
@@ -305,6 +311,12 @@ const I18N = {
     "reglages.apply": "Apply", "reglages.restarting": "Restarting…",
     "reglages.restart": "Restart",
     "reglages.restart.hint": "Restarts without changing any setting, for example to pick up an update already in place.",
+    "reglages.checkUpdates": "Check for updates",
+    "reglages.checkUpdates.hint": "Asks GitHub right away whether a newer version is out. Without this button, blink2video checks by itself every hour.",
+    "reglages.checkUpdates.running": "Checking…",
+    "reglages.checkUpdates.none": "blink2video {version} is up to date.",
+    "reglages.checkUpdates.found": "Version {version} is out: the \"Install {version}\" button is at the top of the page.",
+    "reglages.checkUpdates.offline": "GitHub did not answer. Try again in a moment.",
     "reglages.restarting.settings": "Restarting with the new settings…",
     "reglages.portchange": "Port changed: redirecting to {url} once the shutdown is confirmed…",
     "reglages.stop": "Stop camera monitoring", "reglages.close": "Close",
@@ -2165,17 +2177,27 @@ function card(c) {
   </div>`;
 }
 
-// Le filtre (caméra + période) survit d'une visite à l'autre : quelqu'un qui
-// ne veut voir que les clips de la semaine ne doit pas refaire ce choix à
-// chaque ouverture de la page. Défaut « tout l'historique » tant que rien
-// n'a jamais été choisi (constaté en réel, 2026-08-27).
+// Le filtre (caméra + période + « Grouper par ») survit d'une visite à
+// l'autre : quelqu'un qui ne veut voir que les clips de la semaine ne doit
+// pas refaire ce choix à chaque ouverture de la page. Défaut « tout
+// l'historique » tant que rien n'a jamais été choisi (constaté en réel,
+// 2026-08-27). « Grouper par » revenait à sa valeur par défaut à chaque
+// rechargement, donc à chaque redémarrage de blink2video (issue #36).
 const CLE_FILTRE = "blink2video.filtre";
+const GROUPEMENTS = ["camera", "day"];
 
 function sauvegarderFiltre() {
   try {
     localStorage.setItem(CLE_FILTRE, JSON.stringify(
-      { camera: $("camera").value, plage: plageClips }));
+      { camera: $("camera").value, plage: plageClips, groupBy: $("groupBy").value }));
   } catch (erreur) { /* stockage indisponible (navigation privée…) : tant pis */ }
+}
+
+// Le <select> de « Grouper par » a ses options dès le HTML (à l'inverse de
+// celui des caméras, rempli plus tard) : le choix retenu se pose tout de
+// suite, avant le premier rendu.
+function restaurerGroupement(filtre) {
+  if (filtre && GROUPEMENTS.includes(filtre.groupBy)) $("groupBy").value = filtre.groupBy;
 }
 
 function restaurerFiltre() {
@@ -2189,6 +2211,7 @@ function restaurerFiltre() {
 
 const _filtrePersiste = restaurerFiltre();
 let plageClips = _filtrePersiste?.plage || { preset: "all" };
+restaurerGroupement(_filtrePersiste);
 // Choix en cours dans le panneau, appliqué seulement au clic sur Filtrer -
 // tant qu'aucun préréglage ni plage personnalisée n'a été retouché dans
 // cette ouverture du panneau, Filtrer ne fait que reprendre plageClips.
@@ -2863,6 +2886,33 @@ async function chargerSuppressionAuto() {
     selection: "actives", champ: "actif", nomCamera: (camera) => camera.name,
   });
 }
+
+// « Vérifier les mises à jour » : GitHub tout de suite, sans attendre le fil
+// de fond du serveur (une heure au plus). Une version trouvée fait paraître
+// le bouton « Installer » en haut de la page, comme d'habitude (issue #35).
+$("verifierMajButton").onclick = async () => {
+  const bouton = $("verifierMajButton");
+  bouton.disabled = true;
+  bouton.textContent = t("reglages.checkUpdates.running");
+  try {
+    const resultat = await lireJSON(await fetch("/api/maj/verifier", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: "{}" }));
+    if (resultat.error) {
+      alert(resultat.error);
+      return;
+    }
+    montrerMaj(resultat.maj);
+    if (!resultat.ok) alert(t("reglages.checkUpdates.offline"));
+    else if (resultat.maj && resultat.maj.version) {
+      alert(tf("reglages.checkUpdates.found", { version: resultat.maj.version }));
+    } else alert(tf("reglages.checkUpdates.none", { version: resultat.version }));
+  } catch (erreur) {
+    alert(t("reglages.checkUpdates.offline"));
+  } finally {
+    bouton.disabled = false;
+    bouton.textContent = t("reglages.checkUpdates");
+  }
+};
 
 // Même déroulé que le bouton de mise à jour : enregistrer, attendre que le
 // serveur redémarre, puis retrouver la page. Les trois parcours d'attente

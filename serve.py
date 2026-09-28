@@ -4456,6 +4456,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_json({"ok": True, "stopped": arrete, "session_id": session_id})
             return
 
+        if route == "/api/maj/verifier":
+            # Bouton « Vérifier les mises à jour » des réglages : GitHub tout
+            # de suite, sans attendre le fil de fond (une heure au plus, voir
+            # maj.FRAICHEUR). « ok » faux : GitHub n'a pas répondu, le cache
+            # reste tel quel.
+            neuve, ok = maj.verifier_maintenant()
+            self.send_json({"maj": neuve, "ok": ok, "version": runtime.VERSION})
+            return
+
         if route == "/api/update":
             neuve = maj.disponible(reseau=False)
             if not neuve:
@@ -4795,6 +4804,9 @@ __CSS__
     <button class="primary" id="reglagesApply" data-i18n="reglages.apply"
             data-i18n-title="reglages.hint"
             title="Les réglages ne prennent effet qu'au redémarrage : « Appliquer » enregistre et redémarre. Changer le port redirige cette page vers la nouvelle adresse.">Appliquer</button>
+    <button id="verifierMajButton" data-i18n="reglages.checkUpdates"
+            data-i18n-title="reglages.checkUpdates.hint"
+            title="Demande tout de suite à GitHub si une version plus récente est publiée. Sans ce bouton, blink2video vérifie de lui-même toutes les heures.">Vérifier les mises à jour</button>
     <button id="redemarrerButton" data-i18n="reglages.restart"
             data-i18n-title="reglages.restart.hint"
             title="Redémarre sans rien changer aux réglages, par exemple pour reprendre une mise à jour déjà en place.">Redémarrer</button>
@@ -4925,8 +4937,9 @@ def veiller_sur_les_versions() -> None:
 
     Un fil séparé plutôt qu'un appel dans la page : GitHub peut mettre dix
     secondes à répondre, ou ne pas répondre du tout, et rien de tout cela ne
-    doit se voir depuis l'interface. Une visite par jour de fonctionnement
-    suffit à repérer une publication."""
+    doit se voir depuis l'interface. Une visite par heure (maj.FRAICHEUR) :
+    à six heures, une publication pouvait attendre une demi-journée avant
+    d'apparaître (issue #35)."""
     def veille():
         while True:
             try:
