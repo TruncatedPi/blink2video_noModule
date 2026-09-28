@@ -114,7 +114,7 @@ const I18N = {
     "reglages.liveProtocol.webrtc": "WebRTC (rapide)",
     "reglages.liveProtocol.mse": "MSE (compatible)",
     "reglages.liveAutoStop": "Arrêt auto du direct (s)",
-    "reglages.liveAutoStop.hint": "Arrête le direct tout seul après ce délai, jusqu'à 300 s. Au-delà, tout direct s'arrête de toute façon au bout de 5 minutes. Vide ou 0 = ce plafond de 5 minutes seul.",
+    "reglages.liveAutoStop.hint": "Arrête le direct tout seul après ce délai, jusqu'à 420 s, même en direct continu. Vide ou 0 : pas d'arrêt automatique ; Blink ferme de lui-même chaque direct au bout d'environ 6 minutes, et la case « Direct continu » d'une caméra le relance.",
     "reglages.archivage": "Création des vidéos temporelles par caméra",
     "reglages.downloadAuto": "Télécharger les clips automatiquement",
     "reglages.downloadAuto.hint": "Décochée, aucun clip n'est plus récupéré ni stocké : utile pour ne garder que le direct. Les cadences ci-dessous n'ont alors plus d'effet.",
@@ -178,6 +178,9 @@ const I18N = {
     "camera.snapshot": "Photo", "camera.snapshotting": "Photo…",
     "camera.snapshot.saved": "Photo enregistrée ✓",
     "camera.snapshot.title": "Prend une photo maintenant et la garde dans Photos. Consomme un peu de batterie, jusqu'à 2 minutes.",
+    "camera.continuous": "Direct continu",
+    "camera.continuous.title": "Relance le direct chaque fois que Blink le ferme, au bout d'environ 6 minutes, jusqu'à ce que vous cliquiez sur Arrêter. Une pause d'une dizaine de secondes marque chaque relance.",
+    "camera.continuous.title.battery": "Relance le direct chaque fois que Blink le ferme, au bout d'environ 6 minutes, jusqu'à ce que vous cliquiez sur Arrêter. Une pause d'une dizaine de secondes marque chaque relance. Sur cette caméra à batterie, un direct sans fin la vide vite.",
     "camera.battery": "batterie {v}", "camera.wifi": "Wi-Fi {v} dBm",
     "camera.lfr": "liaison module {v}", "camera.measured.at": "relevé à {v}",
     "camera.measured.on": "relevé du {v}", "camera.firmware": "micrologiciel {v}",
@@ -288,7 +291,7 @@ const I18N = {
     "reglages.liveProtocol.webrtc": "WebRTC (fast)",
     "reglages.liveProtocol.mse": "MSE (compatible)",
     "reglages.liveAutoStop": "Auto-stop live view (s)",
-    "reglages.liveAutoStop.hint": "Stops the live view on its own after this delay, up to 300 s. Beyond that, every live view stops after 5 minutes anyway. Empty or 0 = that 5-minute cap alone.",
+    "reglages.liveAutoStop.hint": "Stops the live view on its own after this delay, up to 420 s, even in continuous live. Empty or 0: no auto-stop; Blink closes every live view by itself after about 6 minutes, and a camera's \"Continuous live\" box starts it again.",
     "reglages.archivage": "Per-camera time-based video creation",
     "reglages.downloadAuto": "Download clips automatically",
     "reglages.downloadAuto.hint": "Unchecked, no clip is fetched or stored anymore: useful to keep only the live view. The cadences below then have no effect.",
@@ -352,6 +355,9 @@ const I18N = {
     "camera.snapshot": "Snapshot", "camera.snapshotting": "Snapshot…",
     "camera.snapshot.saved": "Snapshot saved ✓",
     "camera.snapshot.title": "Takes a picture now and keeps it under Pictures. Uses a bit of battery, up to 2 minutes.",
+    "camera.continuous": "Continuous live",
+    "camera.continuous.title": "Starts the live view again each time Blink closes it, after about 6 minutes, until you click Stop. A pause of about ten seconds marks each restart.",
+    "camera.continuous.title.battery": "Starts the live view again each time Blink closes it, after about 6 minutes, until you click Stop. A pause of about ten seconds marks each restart. On this battery camera, an endless live view drains it quickly.",
     "camera.battery": "battery {v}", "camera.wifi": "Wi-Fi {v} dBm",
     "camera.lfr": "module link {v}", "camera.measured.at": "measured at {v}",
     "camera.measured.on": "measured on {v}", "camera.firmware": "firmware {v}",
@@ -939,6 +945,11 @@ function cameraCard(c, systemArmed) {
               data-action="wake" data-name="${h(c.key)}">${h(t("camera.wake"))}</button>
       <button class="act grouped" title="${h(t("camera.snapshot.title"))}"
               data-action="snapshot" data-name="${h(c.key)}">${h(t("camera.snapshot"))}</button>
+      <label class="act grouped continu"
+             title="${h(t(c.battery ? "camera.continuous.title.battery" : "camera.continuous.title"))}">
+        <input type="checkbox" data-action="continu" data-name="${h(c.key)}"${directContinu(c.key) ? " checked" : ""}>
+        ${h(t("camera.continuous"))}
+      </label>
     </div>
   </div>`;
 }
@@ -1046,6 +1057,55 @@ function stopWatch(name, beacon = false) {
 // la balise : il faut son propre AbortController, gardé ici par caméra pour
 // que stopWatch() puisse le couper.
 const MSE_ABORT = {};
+
+// « Direct continu », caméra par caméra (case de cameraCard) : chaque session
+// que Blink ferme de lui-même (au bout d'environ six minutes de vidéo, mesuré
+// le 2026-09-28) est aussitôt suivie d'une nouvelle, sans le budget de dix
+// minutes des reprises ordinaires, jusqu'à ce qu'on clique sur Arrêter.
+// Décochée par défaut : sur une caméra à batterie, un direct sans fin la vide
+// vite. Retenue d'une visite à l'autre, comme le filtre ; sans stockage
+// (navigation privée), le choix vaut pour la page ouverte.
+const CLE_DIRECT_CONTINU = "blink2video.directContinu";
+const DIRECT_CONTINU_REVERIFICATION_MS = 60 * 1000;
+const _directsContinus = new Set((() => {
+  try {
+    const liste = JSON.parse(localStorage.getItem(CLE_DIRECT_CONTINU) || "[]");
+    return Array.isArray(liste) ? liste.filter((nom) => typeof nom === "string") : [];
+  } catch (erreur) {
+    return [];
+  }
+})());
+
+function directContinu(name) {
+  return _directsContinus.has(name);
+}
+
+function choisirDirectContinu(name, actif) {
+  if (actif) _directsContinus.add(name);
+  else _directsContinus.delete(name);
+  try {
+    localStorage.setItem(CLE_DIRECT_CONTINU, JSON.stringify([..._directsContinus]));
+  } catch (erreur) { /* stockage indisponible : le choix vaut pour cette page */ }
+}
+
+// Minuterie du budget total d'un direct (MSE_BUDGET_TOTAL_MS,
+// WEBRTC_BUDGET_TOTAL_MS) : à échéance, `surEcoulement`, sauf en direct
+// continu où elle se revérifie chaque minute ; une case décochée en cours de
+// route rend ainsi au budget, déjà écoulé, son effet. Rend un objet dont `id`
+// est la minuterie en cours, pour clearTimeout.
+function armerBudget(name, delaiMs, surEcoulement) {
+  const minuterie = { id: null };
+  const verifier = () => {
+    if (directContinu(name)) {
+      minuterie.id = setTimeout(verifier, DIRECT_CONTINU_REVERIFICATION_MS);
+      return;
+    }
+    surEcoulement();
+  };
+  minuterie.id = setTimeout(verifier, delaiMs);
+  return minuterie;
+}
+
 // Un seul identifiant par watchMse() (pas par tentative de reconnexion,
 // comme WEBRTC_SESSION) : envoyé au serveur (send_live_mse) pour qu'il
 // puisse interrompre sa boucle d'envoi sur demande explicite plutôt que
@@ -1077,9 +1137,10 @@ const MSE_BUDGET_TOTAL_MS = 10 * 60 * 1000;
 const MSE_DELAI_SOURCEOPEN_MS = 10 * 1000;
 const MSE_DELAI_REPONSE_MS = 110 * 1000;
 const MSE_DELAI_PREMIERE_IMAGE_MS = 60 * 1000;
-// Le serveur coupe lui-même un direct après 300 s. Cette marge interrompt
-// aussi read() ou updateend si le navigateur ne propage pas sa fermeture.
-const MSE_DUREE_APRES_LECTURE_MS = 330 * 1000;
+// Le serveur coupe lui-même une session après 420 s (LIVE_MAX_SECONDS),
+// Blink d'ordinaire vers six minutes. Cette marge interrompt aussi read()
+// ou updateend si le navigateur ne propage pas sa fermeture.
+const MSE_DUREE_APRES_LECTURE_MS = 450 * 1000;
 const MSE_DELAI_DECODAGE_FINAL_MS = 1000;
 
 function erreurAnnulationMse() {
@@ -1432,7 +1493,8 @@ const WEBRTC_BUDGET_TOTAL_MS = 10 * 60 * 1000;
 const WEBRTC_DELAI_DEMARRAGE_MS = 130 * 1000;
 const WEBRTC_DELAI_PREMIERE_IMAGE_MS = 30 * 1000;
 const WEBRTC_DELAI_DECONNEXION_MS = 10 * 1000;
-const WEBRTC_DUREE_APRES_LECTURE_MS = 330 * 1000;
+// Même marge qu'en MSE au-dessus des 420 s du serveur (SESSION_MAX_SECONDS).
+const WEBRTC_DUREE_APRES_LECTURE_MS = 450 * 1000;
 
 function nouvelIdentifiantDirect() {
   const octets = new Uint8Array(16);
@@ -1515,10 +1577,11 @@ async function watchWebRTC(name, controller = new AbortController(), t0 = perfor
   const video = box.querySelector("video");
   let budgetEcoule = false;
   let lecture = false;
-  const idBudget = setTimeout(() => {
-    budgetEcoule = true;
-    controller.abort();
-  }, Math.max(0, WEBRTC_BUDGET_TOTAL_MS - (performance.now() - t0)));
+  const budget = armerBudget(name,
+    Math.max(0, WEBRTC_BUDGET_TOTAL_MS - (performance.now() - t0)), () => {
+      budgetEcoule = true;
+      controller.abort();
+    });
 
   let hint = null;
   let minuteur = null;
@@ -1541,12 +1604,15 @@ async function watchWebRTC(name, controller = new AbortController(), t0 = perfor
   };
 
   // Une réponse SDP ne prouve pas la lecture : reprendre les échecs jusqu'à
-  // la première image. Après celle-ci, une fin rend la main à l'utilisateur.
+  // la première image. Après celle-ci, une fin rend la main à l'utilisateur,
+  // sauf en direct continu, où Blink ayant fermé la session (ou le flux
+  // s'étant interrompu après lecture), une nouvelle s'ouvre aussitôt.
   let echecs = 0;
   let essais = 0;
   let derniereErreur = null;
   try {
-    while (echecs < WEBRTC_MAX_ECHECS && performance.now() - t0 < WEBRTC_BUDGET_TOTAL_MS) {
+    while (echecs < WEBRTC_MAX_ECHECS
+           && (directContinu(name) || performance.now() - t0 < WEBRTC_BUDGET_TOTAL_MS)) {
       if (controller.signal.aborted) return;
       const reveilInitial = essais === 0;
       afficherIndice(reveilInitial ? t("watch.waking") : t("watch.reconnecting"));
@@ -1557,17 +1623,20 @@ async function watchWebRTC(name, controller = new AbortController(), t0 = perfor
       }, 500) : null;
       try {
         await tenterWebRTC(name, video, controller.signal, ++essais, confirmerLecture);
-        break;
+        if (!directContinu(name)) break;
+        echecs = 0;
+        derniereErreur = null;
       } catch (error) {
         if (error.name === "AbortError" && controller.signal.aborted) {
           if (!budgetEcoule) return;
           break;
         }
         derniereErreur = error;
-        if (error.webrtcLecture || error.webrtcIncompatible) break;
+        if (error.webrtcIncompatible || (error.webrtcLecture && !directContinu(name))) break;
         // Un autre onglet ou un téléchargement peut occuper le module.
         // Seul le budget global borne ce cas, sans épuiser les essais caméra.
-        if (error.status !== 409) echecs++;
+        if (error.webrtcLecture) echecs = 0;
+        else if (error.status !== 409) echecs++;
       } finally {
         if (minuteur !== null) { clearInterval(minuteur); minuteur = null; }
       }
@@ -1581,7 +1650,7 @@ async function watchWebRTC(name, controller = new AbortController(), t0 = perfor
       }
     }
   } finally {
-    clearTimeout(idBudget);
+    clearTimeout(budget.id);
     if (WEBRTC_ABORT[name] === controller) delete WEBRTC_ABORT[name];
   }
   if (controller.signal.aborted && !budgetEcoule) return;
@@ -1762,17 +1831,19 @@ async function watchMse(name) {
   const sessionId = nouvelIdentifiantDirect();
   MSE_SESSION[name] = sessionId;
   let budgetEcoule = false;
-  const idBudget = setTimeout(() => {
+  const budget = armerBudget(name, MSE_BUDGET_TOTAL_MS, () => {
     budgetEcoule = true;
     controller.abort();
-  }, MSE_BUDGET_TOTAL_MS);
+  });
 
   let echecsAVide = 0;
   let derniereErreur = null;
   let lecturePendantBudget = false;
   try {
+    // En direct continu, seul Arrêter ou des échecs répétés sans image
+    // mettent fin aux reprises (voir directContinu).
     while (echecsAVide < MSE_MAX_ECHECS_A_VIDE
-           && performance.now() - t0 < MSE_BUDGET_TOTAL_MS) {
+           && (directContinu(name) || performance.now() - t0 < MSE_BUDGET_TOTAL_MS)) {
       const reveilInitial = echecsAVide === 0 && derniereErreur === null;
       const texte = reveilInitial ? t("watch.waking") : t("watch.reconnecting");
       try {
@@ -1809,7 +1880,7 @@ async function watchMse(name) {
       }
     }
   } finally {
-    clearTimeout(idBudget);
+    clearTimeout(budget.id);
     if (MSE_ABORT[name] === controller) delete MSE_ABORT[name];
     if (MSE_SESSION[name] === sessionId) delete MSE_SESSION[name];
   }
@@ -3148,6 +3219,11 @@ $("list").addEventListener("click", (event) => {
       break;
     case "wake":
       reveillerCamera(name, cible);
+      break;
+    case "continu":
+      // La case bascule d'elle-même (aucun preventDefault ici) : on
+      // retient son nouvel état, lu par les boucles de reprise du direct.
+      choisirDirectContinu(name, cible.checked);
       break;
     case "snapshot":
       prendreSnapshot(name, cible);

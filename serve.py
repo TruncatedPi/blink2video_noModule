@@ -335,7 +335,13 @@ def _slot_occupe_message() -> str:
     cible = f" ({camera})" if camera else ""
     return (f"Le module est deja occupe : {quoi}{cible}, depuis "
             f"{depuis:.0f}s.")
-LIVE_MAX_SECONDS = 300
+# Plafond d'une session de direct. Blink la ferme lui-même au bout d'environ
+# six minutes de vidéo : son relais coupe la connexion, mesuré le 2026-09-28
+# sur une Mini et une Outdoor (356 à 375 s de flux, 6:01 selon ffmpeg), sans
+# qu'il faille jamais « Continuer ». Sept minutes le laissent aller au bout,
+# et restent un filet si ce relais ne fermait jamais. Au-delà, la case
+# « Direct continu » de la page ouvre une nouvelle session.
+LIVE_MAX_SECONDS = 420
 # Délai accordé à la première image. Une caméra sur batterie doit se réveiller,
 # donc on est patient ; au-delà on considère qu'elle ne répondra pas.
 LIVE_FIRST_FRAME_SECONDS = 40
@@ -4720,9 +4726,9 @@ __CSS__
         </select>
       </div>
       <div class="champCadence" data-i18n-title="reglages.liveAutoStop.hint"
-           title="Arrête le direct tout seul après ce délai, jusqu'à 300 s. Au-delà, tout direct s'arrête de toute façon au bout de 5 minutes. Vide ou 0 = ce plafond de 5 minutes seul.">
+           title="Arrête le direct tout seul après ce délai, jusqu'à 420 s, même en direct continu. Vide ou 0 : pas d'arrêt automatique ; Blink ferme de lui-même chaque direct au bout d'environ 6 minutes, et la case « Direct continu » d'une caméra le relance.">
         <label for="liveAutoStopSeconds" data-i18n="reglages.liveAutoStop">Arrêt auto du direct (s)</label>
-        <input type="number" id="liveAutoStopSeconds" min="0" max="300" placeholder="0">
+        <input type="number" id="liveAutoStopSeconds" min="0" max="420" placeholder="0">
       </div>
     </fieldset>
     <fieldset>

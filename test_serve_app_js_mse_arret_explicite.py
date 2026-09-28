@@ -116,7 +116,12 @@ class TestsGenerationSessionIdWatchMse(unittest.TestCase):
         fin_id = source.index("\n}\n", debut_id) + len("\n}\n")
         debut_watch = source.index("async function watchMse")
         fin_watch = source.index("// L'état de repos", debut_watch)
-        cls.bloc = source[debut_id:fin_id] + "\n" + source[debut_watch:fin_watch]
+        # watchMse() arme son budget par armerBudget(), qui consulte la case
+        # « Direct continu » : le bloc qui les définit l'accompagne.
+        debut_continu = source.index("const CLE_DIRECT_CONTINU")
+        fin_continu = source.index("// Un seul identifiant par watchMse()", debut_continu)
+        cls.bloc = (source[debut_continu:fin_continu] + "\n" + source[debut_id:fin_id]
+                    + "\n" + source[debut_watch:fin_watch])
         if "connecterMse(" not in cls.bloc or "sessionId" not in cls.bloc:
             raise AssertionError("watchMse() ne transmet plus de sessionId à connecterMse()")
 

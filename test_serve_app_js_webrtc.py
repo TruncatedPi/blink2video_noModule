@@ -27,7 +27,7 @@ class TestsNavigateurWebRTC(unittest.TestCase):
                 "const WEBRTC_DELAI_DEMARRAGE_MS = 150;",
             "const WEBRTC_DELAI_PREMIERE_IMAGE_MS = 30 * 1000;":
                 "const WEBRTC_DELAI_PREMIERE_IMAGE_MS = 30;",
-            "const WEBRTC_DUREE_APRES_LECTURE_MS = 330 * 1000;":
+            "const WEBRTC_DUREE_APRES_LECTURE_MS = 450 * 1000;":
                 "const WEBRTC_DUREE_APRES_LECTURE_MS = 100;",
             "const WEBRTC_BUDGET_TOTAL_MS = 10 * 60 * 1000;":
                 "const WEBRTC_BUDGET_TOTAL_MS = 400;",
@@ -110,7 +110,8 @@ class RTCPeerConnection extends EventTarget {
     this.connectionState = 'connected';
     const track = new EventTarget();
     this.ontrack({track, streams: [{}]});
-    if (scenario === 'decoded' || scenario === 'ended' || scenario === 'retry_then_ended') {
+    if (scenario === 'decoded' || scenario === 'ended' || scenario === 'retry_then_ended'
+        || scenario === 'continuous') {
       video.readyState = 2; video.videoWidth = 1920;
       video.dispatchEvent(new Event('loadeddata'));
       if (scenario !== 'decoded') setTimeout(() => track.dispatchEvent(new Event('ended')), 15);
@@ -181,6 +182,23 @@ class RTCPeerConnection extends EventTarget {
     assert.equal(Object.keys(WEBRTC_ABORT).length, 0);
     assert.equal(failures.length, 0);
     assert.equal(box.innerHTML, 'repos');
+  } else if (scenario === 'continuous') {
+    // Chaque session se ferme d'elle-même, comme Blink au bout de six
+    // minutes : case cochée, une autre s'ouvre, même au-delà du budget
+    // (400 ms ici) ; décochée, la boucle s'arrête à la fin de la session.
+    choisirDirectContinu('Cam', true);
+    const debut = performance.now();
+    const run = watchWebRTC('Cam');
+    while (performance.now() - debut < WEBRTC_BUDGET_TOTAL_MS + 200) await pauses(10);
+    const avant = offers.length;
+    choisirDirectContinu('Cam', false);
+    await run;
+    assert.ok(avant >= 3, `sessions ouvertes : ${avant}`);
+    assert.ok(offers.length <= avant + 1);
+    assert.equal(failures.length, 0);
+    assert.equal(box.innerHTML, 'repos');
+    assert.equal(Object.keys(WEBRTC_ABORT).length, 0);
+    result.sessions = offers.length;
   } else if (scenario === 'no_h264') {
     await watchWebRTC('Cam');
     assert.equal(offers.length, 0);
@@ -229,6 +247,9 @@ class RTCPeerConnection extends EventTarget {
                                 capture_output=True, text=True, encoding="utf-8", timeout=60)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(json.loads(result.stdout)["ok"])
+
+    def test_direct_continu_enchaine_les_sessions_au_dela_du_budget(self):
+        self.scenario("continuous")
 
     def test_grille_preserve_video_et_demande_en_attente(self):
         self.scenario("render")

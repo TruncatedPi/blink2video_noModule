@@ -44,7 +44,7 @@ class TestsLecteurMse(unittest.TestCase):
                 "const MSE_DELAI_REPONSE_MS = 25;",
             "const MSE_DELAI_PREMIERE_IMAGE_MS = 60 * 1000;":
                 "const MSE_DELAI_PREMIERE_IMAGE_MS = 25;",
-            "const MSE_DUREE_APRES_LECTURE_MS = 330 * 1000;":
+            "const MSE_DUREE_APRES_LECTURE_MS = 450 * 1000;":
                 "const MSE_DUREE_APRES_LECTURE_MS = 50;",
             "const MSE_DELAI_DECODAGE_FINAL_MS = 1000;":
                 "const MSE_DELAI_DECODAGE_FINAL_MS = 5;",

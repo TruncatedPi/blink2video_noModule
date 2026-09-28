@@ -63,6 +63,10 @@
      fois, sur le premier, sinon flexbox partage l'espace libre entre les
      deux et les separe au lieu de les coller. */
   .act.grouped { margin-left:0; }
+  /* « Direct continu » : une case parmi les boutons d'action de la carte. */
+  label.act.continu { display:inline-flex; align-items:center; gap:5px; cursor:pointer;
+                      border:1px solid var(--line); }
+  label.act.continu input { margin:0; cursor:pointer; }
   .act:disabled { opacity:.6; cursor:default; }
   #log { white-space:pre-wrap; font:13px/1.45 ui-monospace, Consolas, monospace;
          background:#101216; border:1px solid var(--line); border-radius:8px;

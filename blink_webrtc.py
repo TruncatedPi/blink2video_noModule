@@ -88,7 +88,7 @@ NEGOCIATION_MAX_SECONDS = 15
 PREMIERE_IMAGE_MAX_SECONDS = 40
 # Silence en cours de session (apres le premier SPS/PPS, donc une fois
 # connectionState deja passe a "connected") : distinct de SESSION_MAX_SECONDS
-# (300s), qui borne la duree totale d'un direct sain, pas le temps qu'on
+# (420s), qui borne la duree totale d'un direct sain, pas le temps qu'on
 # tolere sans le moindre octet. Sans ce plafond-la, _lire() (ci-dessous)
 # reste bloque sur son `await reader.read()` tant que le relais Blink ne
 # ferme pas proprement la connexion TCP - jamais garanti (WinError 10054
@@ -101,7 +101,10 @@ PREMIERE_IMAGE_MAX_SECONDS = 40
 # grandeur qu'ATTENTE_HUB_MAX_SECONDS/le timeout de _stop_stream (serve.py,
 # 20s chacun) plutot qu'une valeur inventee ici.
 SILENCE_FLUX_MAX_SECONDS = 20
-SESSION_MAX_SECONDS = 300
+# Même valeur et même raison que LIVE_MAX_SECONDS (serve.py) : Blink ferme
+# lui-même une session au bout d'environ six minutes de vidéo (mesuré le
+# 2026-09-28), sept minutes le laissent aller au bout.
+SESSION_MAX_SECONDS = 420
 FERMETURE_MAX_SECONDS = 10
 
 # Tampon de lecture (jitter buffer) avant d'emettre la toute premiere image,
