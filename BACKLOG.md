@@ -658,3 +658,18 @@ l'utilisateur - et le lot d'optimisations, non urgentes.
   attributs prives de blinkpy ; bootstrap qui reutilise l'environnement
   global au lieu de rester isole ; plusieurs helpers JSON divergents,
   a centraliser (meme esprit que safe_name, deja fait en 28.64).
+
+- **Flux par camera pour Frigate / Home Assistant (RTSP via go2rtc).**
+  Source : reddit/wperez3825, 2026-09-28, en reponse au "Direct continu" de
+  la 0.14.6 ("great news for Blink Minis since they're plugged in").
+  Demande : exposer chaque camera en flux, par exemple via go2rtc, pour que
+  Frigate et Home Assistant l'enregistrent et l'affichent. Analyse du
+  2026-09-28 : faisable, mais un Sync Module ne traite qu'une commande a la
+  fois (voir MODULE_SLOT, serve.py), donc au mieux un direct par systeme
+  Blink en meme temps ; deux directs simultanes sur un meme compte jamais
+  essayes. Travail : adresse stable par camera protegee par une cle fixe
+  (comme le jeton de webhook), relance continue cote serveur (elle vit
+  aujourd'hui dans la page), flux en MPEG-TS plutot qu'en MP4 fragmente pour
+  recoller les sessions de ~6 min, page de doc go2rtc. A essayer d'abord :
+  deux directs en meme temps sur deux systemes, et go2rtc branche sur
+  /live-mse. Mis de cote par Nico pour plus tard.
