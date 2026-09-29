@@ -124,6 +124,10 @@ système.
 | Linux x86-64, glibc 2.35+ (Ubuntu 22.04+, Debian 12+) | `blink2video-linux-x86_64.tar.gz` | `chmod +x blink2video`, puis `./blink2video` |
 | macOS 12+, Apple Silicon | `blink2video-macos-arm64.zip` | `xattr -dr com.apple.quarantine blink2video`, puis `./blink2video` |
 
+Les archives embarquent WebRTC, le protocole par défaut du direct. Sous macOS,
+ses bibliothèques exigent macOS 14 ou plus : sous macOS 12 et 13, blink2video
+démarre normalement et le direct retombe sur MSE.
+
 Windows 7 SP1 x64 dispose d'une [édition legacy séparée](WINDOWS7.md), publiée
 aux côtés de chaque [release](https://github.com/nico579/blink2video/releases/latest).
 Pour le WebRTC natif, utiliser Supermium 144 R5 ou Thorium Legacy 122, validés
