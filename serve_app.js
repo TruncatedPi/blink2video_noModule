@@ -460,8 +460,7 @@ function setLang(code, persist) {
   // déclencherait normalement ce rendu. fill() gère un tableau vide sans
   // problème (l'option « tout » reste posée), donc pas de garde ici.
   if (typeof fill === "function") {
-    fill($("camera"), camerasConnues(), t("filter.allcameras"),
-         (nom) => [nom, (data.models || {})[nom]].filter(Boolean).join(" · "));
+    fill($("camera"), camerasConnues(), t("filter.allcameras"));
   }
   if (typeof render === "function" && data.clips) render();
   if (typeof renderLive === "function" && system) renderLive();
@@ -521,7 +520,7 @@ function cameraSurBatterie(name) {
   return true;
 }
 
-function fill(select, values, all, label) {
+function fill(select, values, all) {
   const kept = select.value;
   select.replaceChildren();
   const optionToutes = document.createElement("option");
@@ -531,7 +530,7 @@ function fill(select, values, all, label) {
   for (const value of values) {
     const option = document.createElement("option");
     option.value = value;
-    option.textContent = label ? label(value) : value;
+    option.textContent = value;
     select.append(option);
   }
   if (values.includes(kept)) select.value = kept;
@@ -2396,9 +2395,10 @@ async function load() {
     c.excludedStaged = c.excluded;
     c.supprimerStaged = false;
   }
-  // Le modèle accompagne le nom ici, une fois, plutôt que sur chaque vignette.
-  fill($("camera"), camerasConnues(), t("filter.allcameras"),
-       (nom) => [nom, (data.models || {})[nom]].filter(Boolean).join(" · "));
+  // Le nom seul : le modèle n'apparaissait ici que pour les caméras déjà vues
+  // en direct, et sous son code interne (hawk, sedona, lotus) quand Blink n'en
+  // donne pas le nom (issue #37). Il reste sur la carte de la caméra.
+  fill($("camera"), camerasConnues(), t("filter.allcameras"));
   // La caméra restaurée ne peut être posée qu'une fois ; les fois suivantes,
   // fill() a déjà de quoi préserver seul la sélection en cours (voir sa
   // propre note sur `kept`).

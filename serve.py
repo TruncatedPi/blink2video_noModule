@@ -519,7 +519,6 @@ def known_identities(paths: dict) -> frozenset:
     return identites
 
 
-CAMERA_FACTS = "cameras.json"
 # Durée mesurée des clips écartés, qui n'ont plus d'entrée dans le registre
 # normalisé (voir collect) : sans ce cache, ffmpeg -i était relancé pour
 # chacun d'eux à chaque ouverture de la page.
@@ -568,7 +567,7 @@ _VERROU_EXCLUSION_DIRECTE = threading.Lock()
 
 def _lire_exclusion_directe(paths: dict) -> set:
     # {"excluded": [...]}, pas une liste nue : md.load_json/save_json (déjà
-    # utilisés pour CAMERA_FACTS, ASSEMBLED_DURATIONS...) exigent un objet
+    # utilisés pour ASSEMBLED_DURATIONS...) exigent un objet
     # JSON - une liste nue s'écrit sans broncher mais se relit silencieusement
     # comme vide (isinstance(..., dict) rejette la liste, load_json rend
     # alors son défaut), constaté en vérifiant ce mécanisme (2026-09-04).
@@ -775,18 +774,6 @@ def horodatage_releve(moment: dt.datetime, fuseau, maintenant: dt.datetime | Non
     return local.isoformat(timespec="minutes"), maintenant.date() == local.date()
 
 
-def remember_cameras(paths: dict, systems: list) -> None:
-    """Note le modèle de chaque caméra à côté des vignettes.
-
-    L'inventaire des clips doit rester instantané et fonctionner hors ligne :
-    il ne peut pas interroger Blink pour connaître un modèle. On garde donc ce
-    qu'on a appris lors du dernier passage par la vue Direct."""
-    facts = {c["name"]: {"kind": c.get("kind"), "firmware": c.get("firmware")}
-             for s in systems for c in s["cameras"]}
-    if facts:
-        md.save_json(paths["thumbs"] / CAMERA_FACTS, facts)
-
-
 def load_excluded_durations(paths: dict) -> dict:
     cache = md.load_json(paths["thumbs"] / EXCLUDED_DURATIONS, {})
     return cache if isinstance(cache, dict) else {}
@@ -837,7 +824,6 @@ def collect(paths: dict, timezone: ZoneInfo, ffmpeg: str = "",
     # load_excluded_durations) pour ne pas relancer ffmpeg à chaque requête.
     probed = md.load_json(paths["normalized"] / md.NORMALIZED_STATE, {}).get("clips")
     probed = probed if isinstance(probed, dict) else {}
-    facts = md.load_json(paths["thumbs"] / CAMERA_FACTS, {})
     duration_cache = None
 
     clips = []
@@ -960,24 +946,8 @@ def collect(paths: dict, timezone: ZoneInfo, ffmpeg: str = "",
     return {
         "clips": clips,
         "cameras": sorted({clip["camera"] for clip in clips}),
-        # Le modèle est propre à la caméra, pas au clip : envoyé une fois ici,
-        # et retiré de chaque clip pour qu'aucun affichage ne le répète.
         "passages": runtime.passages(),
         "sources": provenances(entries),
-        # Depuis facts (CAMERA_FACTS, écrit par remember_cameras à chaque
-        # passage par Direct), pas depuis les clips : une caméra sans aucun
-        # clip téléchargé (vue seulement en direct) a quand même un modèle
-        # connu dès qu'on est passé par Direct une fois, alors qu'elle
-        # n'apparaîtrait jamais dans une boucle sur les clips (constaté en
-        # réel, 2026-09-04 - Salon/Terrasse1 sans modèle affiché, seule
-        # Jardin, qui a des clips, l'avait). Pas de « modèle » par ex. pour
-        # un nom de code interne non documenté par Blink (autre que
-        # « owl »/« catalina ») : model_name() renvoie alors ce code tel
-        # quel plutôt que rien, jamais None, donc jamais filtré ici.
-        "models": {nom: modele for nom, modele in (
-            (nom, model_name((info or {}).get("kind")))
-            for nom, info in facts.items()
-        ) if modele},
         # Permet à la page de dire « X clips sur Y connus » et de proposer
         # explicitement de charger le reste : quelle plage précise est active
         # (préréglage ou personnalisée) est déjà su côté page, elle seule l'a
@@ -2467,7 +2437,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return run()
 
         state = BLINK.call(read, timeout=60)
-        remember_cameras(self.paths, state.get("systems") or [])
         state["webrtc"] = WEBRTC_ACTIF
         # Relu a chaque appel, contrairement a WEBRTC_ACTIF (fige a l'import
         # du process) : un changement depuis les Reglages redemarre deja le
