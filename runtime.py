@@ -1996,7 +1996,19 @@ def verrou(nom: str, owner: str, stale_after: int = 600, attente: int = 0,
 
         presente = _lire_verrou(fichier)
         if presente is None:
-            if fichier.exists():
+            try:
+                existe = fichier.exists()
+            except PermissionError:
+                # Windows, Python 3.8 : un verrou que son propriétaire vient
+                # de supprimer reste « en attente de suppression » et son
+                # stat() est refusé (CI Win7 du 29/09/2026, le test de
+                # `stop`). Comme pour la création plus haut, il n'est pas
+                # encore libre : on le traite en marque présente, l'attente
+                # (`attente`) et la limite s'appliquent.
+                if os.name != "nt":
+                    raise
+                existe = True
+            if existe:
                 # Présent mais illisible : corrompu, ou fenêtre d'écriture
                 # d'un autre processus pas encore terminée. Les deux se
                 # confondent ici (même limite documentée que pour B-05), mais

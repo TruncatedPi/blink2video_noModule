@@ -1054,6 +1054,23 @@ class TestsDefautsSynchrones(BacASable):
                 self.assertEqual(json.loads(verrou.read_text(encoding="utf-8"))["owner"],
                                  "nouveau")
 
+    @unittest.skipUnless(os.name == "nt", "suppression en attente propre à Windows")
+    def test_verrou_en_attente_de_suppression_leve_busyerror_pas_permissionerror(self):
+        """CI Win7 du 29/09/2026 : sous Python 3.8, Path.exists() laisse passer
+        « accès refusé » sur un verrou que son propriétaire vient de
+        supprimer ; l'erreur traversait verrou() au lieu de lui laisser
+        appliquer `attente`."""
+        verrou = self.home / ".blink_suppression.lock"
+        verrou.write_text("{ pas du json", encoding="utf-8")
+
+        def refuse(_chemin):
+            raise PermissionError(5, "Access is denied")
+
+        with mock.patch("pathlib.Path.exists", refuse):
+            with self.assertRaises(runtime.BusyError):
+                with runtime.verrou("suppression", "challenger", attente=0):
+                    pass
+
     def test_verrou_sans_identite_d_un_pid_illisible_reste_respecte(self):
         """Ancien format de marque : rien à comparer, on ne purge pas."""
         verrou = self.home / ".blink_ancien.lock"
