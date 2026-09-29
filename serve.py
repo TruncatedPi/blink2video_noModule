@@ -755,9 +755,24 @@ def system_key(name: str, sync) -> str:
 
 
 def model_name(kind: str | None) -> str | None:
+    """Nom du modèle d'une caméra pour la ligne technique de sa carte : le
+    nom du produit quand on le connaît, sinon le code que Blink donne au type
+    (« hawk », « sedona », « lotus »), tel quel. Jamais une phrase : ce texte
+    part vers une page qui s'affiche en français ou en anglais, et « type
+    Blink « hawk » » restait français sous une page anglaise (issue #37)."""
     if not kind:
         return None
-    return CAMERA_MODELS.get(kind) or f"type Blink « {kind} »"
+    return CAMERA_MODELS.get(kind) or kind
+
+
+def horodatage_releve(moment: dt.datetime, fuseau, maintenant: dt.datetime | None = None):
+    """(date ISO à la minute, heure du serveur ; est-ce aujourd'hui ?) d'un
+    relevé de caméra. Ni mot ni format de date d'une langue : c'est la page
+    qui compose « relevé à 14:30 » ou « measured on 09/28 at 14:30 » (issue
+    #37 : « 28/09 à 14:30 » partait tel quel sous une page anglaise)."""
+    local = moment.astimezone(fuseau)
+    maintenant = dt.datetime.now(fuseau) if maintenant is None else maintenant.astimezone(fuseau)
+    return local.isoformat(timespec="minutes"), maintenant.date() == local.date()
 
 
 def remember_cameras(paths: dict, systems: list) -> None:
@@ -957,8 +972,8 @@ def collect(paths: dict, timezone: ZoneInfo, ffmpeg: str = "",
         # réel, 2026-09-04 - Salon/Terrasse1 sans modèle affiché, seule
         # Jardin, qui a des clips, l'avait). Pas de « modèle » par ex. pour
         # un nom de code interne non documenté par Blink (autre que
-        # « owl »/« catalina ») : model_name() renvoie alors un texte
-        # explicite plutôt que rien, jamais None, donc jamais filtré ici.
+        # « owl »/« catalina ») : model_name() renvoie alors ce code tel
+        # quel plutôt que rien, jamais None, donc jamais filtré ici.
         "models": {nom: modele for nom, modele in (
             (nom, model_name((info or {}).get("kind")))
             for nom, info in facts.items()
@@ -2311,15 +2326,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         status = str(info.get("status") or "").strip()
         measured = info.get("updated_at")
         age = None
+        measured_today = False
         if measured:
             try:
                 moment = md.parse_created_at(str(measured))
                 age = (dt.datetime.now(dt.timezone.utc) - moment).total_seconds()
-                local = moment.astimezone(self.timezone)
                 # Un relevé du jour se lit mieux à l'heure seule ; au-delà la
-                # date devient nécessaire pour juger de sa fraîcheur.
-                today = dt.datetime.now(self.timezone).date() == local.date()
-                measured = local.strftime("%H:%M" if today else "%d/%m à %H:%M")
+                # date devient nécessaire pour juger de sa fraîcheur. La page
+                # compose le texte, dans sa langue (issue #37).
+                measured, measured_today = horodatage_releve(moment, self.timezone)
             except (ValueError, TypeError):
                 measured, age = None, None
 
@@ -2377,6 +2392,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             "status": status,
             "offline": status == "offline",
             "measured_at": measured,
+            "measured_today": measured_today,
             "age_seconds": age,
         }
 

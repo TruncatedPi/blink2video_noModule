@@ -183,7 +183,7 @@ const I18N = {
     "camera.continuous.title.battery": "Relance le direct chaque fois que Blink le ferme, au bout d'environ 6 minutes, jusqu'à ce que vous cliquiez sur Arrêter. Une pause d'une dizaine de secondes marque chaque relance. Sur cette caméra à batterie, un direct sans fin la vide vite.",
     "camera.battery": "batterie {v}", "camera.wifi": "Wi-Fi {v} dBm",
     "camera.lfr": "liaison module {v}", "camera.measured.at": "relevé à {v}",
-    "camera.measured.on": "relevé du {v}", "camera.firmware": "micrologiciel {v}",
+    "camera.measured.on": "relevé du {d} à {h}", "camera.firmware": "micrologiciel {v}",
     "camera.noclips": "aucun clip récupéré", "camera.clipssource": "clips : {v}",
     "camera.none": "—",
     "watch.live": "Voir en direct", "watch.retry": "Réessayer", "watch.stop": "Arrêter",
@@ -360,7 +360,7 @@ const I18N = {
     "camera.continuous.title.battery": "Starts the live view again each time Blink closes it, after about 6 minutes, until you click Stop. A pause of about ten seconds marks each restart. On this battery camera, an endless live view drains it quickly.",
     "camera.battery": "battery {v}", "camera.wifi": "Wi-Fi {v} dBm",
     "camera.lfr": "module link {v}", "camera.measured.at": "measured at {v}",
-    "camera.measured.on": "measured on {v}", "camera.firmware": "firmware {v}",
+    "camera.measured.on": "measured on {d} at {h}", "camera.firmware": "firmware {v}",
     "camera.noclips": "no clip retrieved", "camera.clipssource": "clips: {v}",
     "camera.none": "—",
     "watch.live": "View live", "watch.retry": "Retry", "watch.stop": "Stop",
@@ -573,8 +573,9 @@ function render() {
   // Grouper par jour n'a de sens que pour les journalieres : hebdomadaires
   // et mensuelles n'ont qu'un seul fichier par semaine/mois et par camera,
   // regrouper par jour n'y changerait rien (issue #14 : "week and month
-  // makes no sense" pour ce mode, dixit le rapporteur).
-  $("groupBySection").hidden = kind !== "daily";
+  // makes no sense" pour ce mode, dixit le rapporteur). Pas davantage avec
+  // une caméra choisie (issue #37, voir regroupable()).
+  $("groupBySection").hidden = !regroupable(kind);
   $("filtreResume").textContent = carteClips ? resumeFiltre() : "";
   // Le décompte n'a de sens que pour clips/direct ; renderClips() le repose
   // à chaque rendu, mais quitter cette vue doit l'effacer, pas le laisser
@@ -720,6 +721,36 @@ function gelerPendantMaj(gele) {
   }
 }
 
+// État du serveur vu depuis la page, pour attendre une relance (mise à jour,
+// Appliquer, Redémarrer) :
+//   "absent"  connexion refusée, ou 502/503/504 : un mandataire (nginx...)
+//             devant le serveur répond à sa place tant qu'il est arrêté, sans
+//             que fetch() lève quoi que ce soit ;
+//   "autre"   403 : un autre processus répond, avec son propre jeton. C'est
+//             le serveur relancé, plus vite que le sondage n'a pu le voir
+//             absent ;
+//   "present" toute autre réponse.
+async function etatServeur() {
+  try {
+    const reponse = await fetch("/api/status", { cache: "no-store" });
+    if (reponse.status === 403) return "autre";
+    if (reponse.status >= 502 && reponse.status <= 504) return "absent";
+    return "present";
+  } catch (erreur) {
+    return "absent";
+  }
+}
+
+// Un pas de sondage : la relance est finie, et la page se recharge, quand le
+// serveur revient après avoir été vu absent, ou dès qu'un autre processus
+// répond (issue #35 : la page restait sur l'ancien serveur, et il fallait la
+// recharger à la main). suivi.parti dit si l'absence a été vue.
+async function sonderRelance(suivi) {
+  const etat = await etatServeur();
+  if (etat === "absent") suivi.parti = true;
+  else if (etat === "autre" || suivi.parti) location.reload();
+}
+
 $("update").onclick = async () => {
   const bouton = $("update");
   bouton.dataset.encours = "1";
@@ -744,15 +775,8 @@ $("update").onclick = async () => {
   // qui ne redémarre rien (déjà à jour, échec...) ne déclenche jamais ça :
   // c'est phase.update_noop, vu par montrerTravail(), qui arrête alors cette
   // boucle et débloque le bouton depuis l'extérieur.
-  let parti = false;
-  miseAJourAttente = setInterval(async () => {
-    try {
-      await fetch("/api/status", { cache: "no-store" });
-      if (parti) location.reload();
-    } catch (erreur) {
-      parti = true;      // il s'est arrêté : la relance suit
-    }
-  }, 2000);
+  const suivi = { parti: false };
+  miseAJourAttente = setInterval(() => sonderRelance(suivi), 2000);
   // Dernier filet si même phase.update_noop n'est jamais arrivé (ex. sous-
   // processus mort avant de pouvoir écrire quoi que ce soit) : mieux vaut un
   // bouton qui se débloque sans explication qu'un bouton mort pour de bon.
@@ -903,6 +927,26 @@ function actualiserVignettes() {
   }
 }
 
+// Un relevé de caméra arrive daté (ISO, à la minute, à l'heure du serveur),
+// avec « est-ce aujourd'hui ? » : la page compose le texte dans sa langue et
+// au format de date du navigateur, comme dateLocale() et dateSnapshot(). Le
+// serveur envoyait « 28/09 à 14:30 », français en dur (issue #37), et la page
+// devinait la phrase à prendre en cherchant ce « à » dedans.
+function dateReleve(c, locale) {
+  const m = (c.measured_at || "").match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (!m) return null;
+  const heure = `${m[4]}:${m[5]}`;
+  if (c.measured_today) return tf("camera.measured.at", { v: heure });
+  const jour = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).toLocaleDateString(
+    locale, { day: "2-digit", month: "2-digit", timeZone: "UTC" });
+  return tf("camera.measured.on", { d: jour, h: heure });
+}
+
+// Température : séparateur décimal du navigateur, pas une virgule en dur.
+function degres(valeur, locale) {
+  return valeur.toLocaleString(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+}
+
 function cameraCard(c, systemArmed) {
   // Une mesure vieille de plus d'une heure est datée, et une caméra hors
   // ligne est signalée comme telle : sa dernière température connue peut
@@ -911,14 +955,11 @@ function cameraCard(c, systemArmed) {
   const num = (v) => v !== null && v !== undefined;
   const releve = [
     c.battery ? tf("camera.battery", { v: c.battery }) + (num(c.battery_signal) ? ` (${c.battery_signal})` : "") : null,
-    num(c.temperature) ? `${c.temperature.toFixed(1).replace(".", ",")} °C` : null,
+    num(c.temperature) ? `${degres(c.temperature)} °C` : null,
     num(c.wifi) ? tf("camera.wifi", { v: c.wifi }) : null,
     num(c.lfr) ? tf("camera.lfr", { v: c.lfr }) : null,
   ].filter(Boolean).join(" · ");
-  const date = c.measured_at
-    ? (c.measured_at.includes("à") ? tf("camera.measured.on", { v: c.measured_at })
-                                   : tf("camera.measured.at", { v: c.measured_at }))
-    : null;
+  const date = dateReleve(c);
   const details = [
     c.offline ? t("camera.offline") : null,
     releve || null,
@@ -2122,6 +2163,16 @@ function renderClips() {
   `).join("");
 }
 
+// « Grouper par » : le choix ne se pose que pour les journalières, et tant
+// qu'aucune caméra n'est choisie. Avec une caméra, chaque jour n'aurait
+// qu'une carte, seule sur sa ligne sous son propre titre (issue #37) : on
+// retombe alors sur un seul groupe, où les journées se suivent en grille,
+// chacune datée sur sa carte. Le choix reste enregistré et revient quand la
+// caméra est décochée.
+function regroupable(kind) {
+  return kind === "daily" && !$("camera").value;
+}
+
 function renderVideos(kind) {
   const items = (videos[kind] || [])
     .filter((v) => !$("camera").value || v.camera === $("camera").value);
@@ -2141,7 +2192,7 @@ function renderVideos(kind) {
   // N'a de sens que pour "daily" (render() cache le selecteur sinon) :
   // hebdomadaires/mensuelles n'ont qu'un seul fichier par periode et par
   // camera, un groupement par "jour" n'y changerait rien.
-  const parJour = kind === "daily" && $("groupBy").value === "day";
+  const parJour = regroupable(kind) && $("groupBy").value === "day";
   const cles = parJour
     ? [...new Set(items.map((v) => v.label))].sort().reverse()
     : [...new Set(items.map((v) => v.camera))];
@@ -3145,17 +3196,10 @@ function attendreFinConfigurationInitiale() {
 
 function attendreRedemarrageReglages() {
   afficherAttenteReglages(t("reglages.restarting.settings"));
-  let parti = false;
-  const attente = setInterval(async () => {
-    try {
-      await fetch("/api/status", { cache: "no-store" });
-      if (parti) location.reload();
-    } catch (erreur) {
-      parti = true;      // il s'est arrêté : la relance suit
-    }
-  }, 2000);
+  const suivi = { parti: false };
+  const attente = setInterval(() => sonderRelance(suivi), 2000);
   setTimeout(() => {
-    if (!parti) {
+    if (!suivi.parti) {
       clearInterval(attente);
       signalerEchecRedemarrageReglages();
     }

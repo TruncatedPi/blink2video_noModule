@@ -24,7 +24,17 @@ class TestsApplicationReglagesJS(unittest.TestCase):
         )
         if lire_json is None:
             raise AssertionError("fonction lireJSON() introuvable")
-        cls.source = lire_json.group(0) + "\n" + source[debut:fin]
+        # La sonde commune aux trois attentes (issue #35) est définie plus haut
+        # dans serve_app.js, avec le bouton de mise à jour.
+        sonde = []
+        for nom in ("etatServeur", "sonderRelance"):
+            trouve = re.search(
+                rf"^async function {nom}\(.*?^\}}", source, re.DOTALL | re.MULTILINE,
+            )
+            if trouve is None:
+                raise AssertionError(f"fonction {nom}() introuvable")
+            sonde.append(trouve.group(0))
+        cls.source = lire_json.group(0) + "\n" + "\n".join(sonde) + "\n" + source[debut:fin]
 
     def _executer(self, **params):
         script = r"""
@@ -103,6 +113,11 @@ globalThis.fetch = async (url, options) => {
   if (url !== '/api/status') throw new Error(`Requête inattendue : ${url}`);
   const statut = statuts.length ? statuts.shift() : {initial_setup: true};
   if (statut === 'reseau') throw new TypeError('Serveur arrêté');
+  // Mandataire (nginx...) devant un serveur arrêté : 502 en HTML, sans que
+  // fetch() lève quoi que ce soit.
+  if (statut === 'mandataire') return {status: 502, json: async () => {
+    throw new SyntaxError('Unexpected token <');
+  }};
   // Serveur remplaçant, jeton différent : 403 en HTML (send_error).
   if (statut === 'jeton') return {status: 403, json: async () => {
     throw new SyntaxError('Unexpected token <');
@@ -327,6 +342,28 @@ function instantane() {
         self.assertEqual([etat["rechargements"] for etat in resultat["etapes"]], [0, 0, 0, 1])
         for requete in resultat["requetes"][1:]:
             self.assertEqual(requete, {"url": "/api/status", "options": {"cache": "no-store"}})
+
+    def test_redemarrage_plus_rapide_que_le_sondage_recharge_sur_le_403_du_nouveau_jeton(self):
+        # Issue #35 : le serveur relancé répond 403 à l'ancienne page, qui n'a
+        # pas son jeton, sans que le sondage l'ait jamais vu absent. Avant, la
+        # page restait sur l'ancien serveur jusqu'à un rechargement à la main.
+        resultat = self._executer(statuts=["jeton"], actions=["poll"])
+        self.assertEqual([etat["rechargements"] for etat in resultat["etapes"]], [1])
+
+    def test_mandataire_qui_repond_502_vaut_absence_puis_retour_recharge(self):
+        # Derrière nginx, l'arrêt du serveur ne fait pas lever fetch() : le
+        # 502 du mandataire doit compter comme une absence, sinon le retour
+        # n'est jamais reconnu.
+        resultat = self._executer(statuts=["mandataire", "mandataire", {}],
+                                  actions=["poll"] * 3)
+        self.assertEqual([etat["rechargements"] for etat in resultat["etapes"]], [0, 0, 1])
+
+    def test_un_502_compte_comme_absence_pour_le_delai_de_garde(self):
+        # Le serveur a bien été vu absent : le butoir de 45 s ne déclare pas
+        # l'échec du redémarrage, le sondage continue.
+        resultat = self._executer(statuts=["mandataire", {}], actions=["poll", 45000, "poll"])
+        self.assertEqual(resultat["etapes"][1]["intervalles"], [2000])
+        self.assertEqual(resultat["etapes"][-1]["rechargements"], 1)
 
     def test_redemarrage_ordinaire_expire_si_serveur_ne_disparait_pas(self):
         resultat = self._executer(statuts=[{}], actions=["poll", 45000])
