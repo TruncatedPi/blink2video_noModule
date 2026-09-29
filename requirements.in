@@ -25,6 +25,13 @@ backports.zoneinfo; python_version < "3.9"
 # Dossier d'état standard de l'OS (même convention que lidar2map et watch2notif).
 platformdirs
 
+# Briques communes aux quatre applications : ici la sortie du service systemd
+# (autostart.py). Sans l'extra « tray », la bibliothèque n'exige rien de plus
+# que la bibliothèque standard : l'icône (pystray, Pillow) reste facultative
+# depuis les sources, et absente de l'image Docker. Fourchette : une version
+# incompatible ne peut pas entrer dans le verrou.
+nico579-commons>=0.3.2,<0.4
+
 # aiortc tire par defaut cryptography>=49 (donc cffi>=2). Sans venv dedie,
 # ce depot s'installe sur le python systeme partage avec d'autres outils
 # (verifie : timezonefinder, pas un besoin de blink2video, exige cffi<2) -

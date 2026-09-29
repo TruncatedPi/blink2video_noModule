@@ -528,6 +528,11 @@ DEPENDANCES = {
     # Dossier d'état standard de l'OS (app_dir) : même convention que
     # lidar2map et watch2notif.
     "platformdirs": "platformdirs",
+    # Briques communes aux quatre applications : ici la sortie du service
+    # systemd (autostart.py). Sans l'extra « tray », elle n'exige rien de plus
+    # que la bibliothèque standard : l'icône reste facultative depuis les
+    # sources. Même fourchette que requirements.in.
+    "nico579_commons": "nico579-commons>=0.3.2,<0.4",
 }
 if sys.version_info < (3, 9):
     # zoneinfo est stdlib depuis 3.9 ; en dessous (édition Windows 7,
@@ -582,7 +587,10 @@ def bootstrap() -> None:
     if mode == "none":
         if manquantes:
             print(_msg("dependances_absentes", liste=", ".join(manquantes)))
-            print(f"  pip install {' '.join(manquantes)}")
+            # Entre guillemets quand la ligne porte une fourchette : collée
+            # telle quelle dans un shell, « < » et « > » redirigeraient.
+            print("  pip install " + " ".join(
+                f'"{pip}"' if set(pip) & set("<>") else pip for pip in manquantes))
             sys.exit(1)
         return
 

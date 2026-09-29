@@ -22,6 +22,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from nico579_commons import relance as relance_commune
+
 import runtime
 
 LIBELLES = {
@@ -470,18 +472,9 @@ UNITE_ENV = "BLINK_UNITE_SYSTEMD"
 def unite_systemd(cgroup: Path = Path("/proc/self/cgroup")) -> str:
     """Unité blink2video (« blink2video-start.service ») dont ce processus
     fait partie, ou "" : hors Linux, hors d'une telle unité, ou cgroup
-    illisible. Lit le cgroup v2 (« 0::/… ») comme les lignes du v1."""
-    if not sys.platform.startswith("linux"):
-        return ""
-    try:
-        texte = cgroup.read_text(encoding="utf-8")
-    except OSError:
-        return ""
-    for ligne in texte.splitlines():
-        for segment in reversed(ligne.rsplit(":", 1)[-1].split("/")):
-            if segment.startswith(NOM + "-") and segment.endswith(".service"):
-                return segment
-    return ""
+    illisible. La lecture du cgroup est celle de nico579-commons, d'où cette
+    fonction est née (issue #35) ; ne reste ici que le nom de l'application."""
+    return relance_commune.unite_systemd(NOM, cgroup)
 
 
 def sortir_du_service(commande: list, environ=None) -> bool:
@@ -495,24 +488,22 @@ def sortir_du_service(commande: list, environ=None) -> bool:
     transitoire, son propre cgroup, que la fin du service n'atteint pas. Un
     premier essai à vide vérifie que la sortie fonctionne vraiment : sans
     lui, un systemd-run qui échouerait après notre départ ne laisserait plus
-    personne pour finir le travail. Le nom de l'unité quittée voyage dans
+    personne pour finir le travail. Les deux gestes, l'essai et le préfixe,
+    sont ceux de nico579_commons.relance.hors_du_service ; ne reste ici que
+    ce qui est propre à blink2video : le nom de l'unité quittée voyage dans
     BLINK_UNITE_SYSTEMD, pour relancer_service()."""
     env = dict(os.environ if environ is None else environ)
     unite = unite_systemd()
     if not unite or env.get(UNITE_ENV):
         return False
     env = env_systemctl(env)
-    portee = ["systemd-run", "--user", "--scope", "--quiet", "--"]
-    try:
-        essai = runtime.lancer([*portee, "true"], check=False, env=env,
-                               stdin=subprocess.DEVNULL, capture_output=True,
-                               timeout=30)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    if essai.returncode != 0:
+    a_lancer = relance_commune.hors_du_service(
+        commande, nom=NOM, unite=unite,
+        lancer=lambda cmd, **options: runtime.lancer(cmd, env=env, **options))
+    if a_lancer == list(commande):
         return False
     env[UNITE_ENV] = unite
-    runtime.demarrer([*portee, *commande], env=env, stdin=subprocess.DEVNULL)
+    runtime.demarrer(a_lancer, env=env, stdin=subprocess.DEVNULL)
     return True
 
 
