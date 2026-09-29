@@ -673,3 +673,26 @@ l'utilisateur - et le lot d'optimisations, non urgentes.
   recoller les sessions de ~6 min, page de doc go2rtc. A essayer d'abord :
   deux directs en meme temps sur deux systemes, et go2rtc branche sur
   /live-mse. Mis de cote par Nico pour plus tard.
+
+- **Idees d'affichage de Markus (issue #40) : trier les cameras, taille des
+  images reglable, masquer des cameras.**
+  Source : MarkusKress, issue #40 "Ideas", 2026-09-29. Reponse publiee le
+  meme jour. Classement : tri des cameras et taille des images, faciles (la
+  page seule) ; masquer des cameras dans les reglages avec une case sur la
+  page pour les reafficher un instant, moyen (liste stockee, les cameras
+  masquees doivent continuer d'enregistrer). Priorite a fixer par Nico.
+  A verifier en meme temps : le nombre d'images par ligne change d'une vue a
+  l'autre a taille de fenetre egale, Markus pense que cela depend de la
+  largeur de la ligne d'informations du haut ; s'il se confirme, c'est un
+  defaut de mise en page, pas un choix.
+
+- **Armement par camera et par horaire (issue #40), pas retenu pour
+  l'instant.**
+  Source : MarkusKress, 2026-09-29, lui-meme "tres specifique, sans
+  importance". Armer et desarmer des cameras choisies a des heures fixes,
+  avec verification de l'etat au demarrage de blink2video. L'armement manuel
+  existe deja (/api/arm, serve.py) ; ce qui manque est le planning, une
+  tache de fond qui ne doit jamais laisser une camera dans le mauvais etat,
+  et qui entre en conflit avec les horaires de l'application Blink. Question
+  posee a Markus : que fait sa solution quand une camera ne repond pas a
+  l'heure d'armement. A ne construire que si la demande se repete.
