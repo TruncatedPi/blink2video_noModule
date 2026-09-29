@@ -1040,6 +1040,31 @@ class TestsDefautsSynchrones(BacASable):
             with runtime.verrou("ttl", "challenger", stale_after=60):
                 pass
 
+    def test_verrou_d_un_pid_recycle_par_un_processus_illisible_est_purge(self):
+        """29/09/2026 : après un redémarrage, le pid du verrou est repris par
+        un processus protégé dont l'OS refuse l'heure de création. Une marque
+        qui porte une identité ne doit pas alors passer pour vivante."""
+        verrou = self.home / ".blink_recycle.lock"
+        verrou.write_text(json.dumps({
+            "owner": "start", "pid": os.getpid(), "jeton": "ancien",
+            "at": time.time() - 7200, "identite": "1218889120:31281190",
+        }), encoding="utf-8")
+        with mock.patch.object(runtime, "identite_processus", return_value=None):
+            with runtime.verrou("recycle", "nouveau"):
+                self.assertEqual(json.loads(verrou.read_text(encoding="utf-8"))["owner"],
+                                 "nouveau")
+
+    def test_verrou_sans_identite_d_un_pid_illisible_reste_respecte(self):
+        """Ancien format de marque : rien à comparer, on ne purge pas."""
+        verrou = self.home / ".blink_ancien.lock"
+        verrou.write_text(json.dumps({
+            "owner": "start", "pid": os.getpid(), "at": time.time() - 7200,
+        }), encoding="utf-8")
+        with mock.patch.object(runtime, "identite_processus", return_value=None):
+            with self.assertRaises(runtime.BusyError):
+                with runtime.verrou("ancien", "challenger"):
+                    pass
+
     def test_B05_acquisition_concurrente_n_a_qu_un_gagnant(self):
         """B-05 : deux check-then-write synchronisés ne doivent pas entrer."""
         contexte = multiprocessing.get_context("spawn")

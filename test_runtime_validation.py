@@ -233,21 +233,23 @@ class VerrouTests(unittest.TestCase):
                 pass
         cible.unlink()
 
-    def test_verrou_identite_actuelle_inconnue_reste_protege(self) -> None:
-        """Revue du 27/08, bug 1 : si identite_processus() échoue à
-        interroger le pid actuel (OpenProcess refusé, par exemple), un None
-        ne doit pas valoir "identité différente" - seulement "on ne sait
-        pas", donc pas de purge à tort d'un propriétaire pourtant vivant."""
+    def test_verrou_identite_actuelle_illisible_est_un_pid_recycle(self) -> None:
+        """Règle de la revue du 27/08 (bug 1) renversée le 29/09/2026, avec
+        l'accord de Nico : elle tenait un None pour « on ne sait pas » et
+        gardait le verrou. En réel, après un redémarrage, le pid du verrou est
+        repris par un service protégé (accès refusé) et le démarrage
+        automatique restait bloqué. Un propriétaire de notre compte est
+        toujours lisible : illisible, avec une identité enregistrée, veut dire
+        recyclé."""
         cible = self.fichier("identite-inconnue")
         cible.write_text(json.dumps(
-            {"owner": "legitime", "pid": os.getpid(), "jeton": "valide",
+            {"owner": "ancien", "pid": os.getpid(), "jeton": "valide",
              "at": time.time(), "identite": "identite-enregistree-a-la-creation"}
         ), encoding="utf-8")
         with mock.patch.object(runtime, "identite_processus", return_value=None):
-            with self.assertRaises(runtime.BusyError):
-                with runtime.verrou("identite-inconnue", "voleur", attente=0):
-                    pass
-        cible.unlink()
+            with runtime.verrou("identite-inconnue", "nouveau", attente=0):
+                self.assertEqual(json.loads(cible.read_text(encoding="utf-8"))["owner"],
+                                 "nouveau")
 
     def test_verrou_corrompu_leve_busyerror_au_lieu_de_boucler(self) -> None:
         """Bug #3, revue de code du 0eab463 : un fichier de verrou présent

@@ -2025,10 +2025,16 @@ def verrou(nom: str, owner: str, stale_after: int = 600, attente: int = 0,
         # un None ici ne prouve pas une identité différente, seulement qu'on
         # n'a pas pu la lire, donc on ne tranche pas "différent" sur cette
         # seule base (revue du 27/08, bug 1).
+        # Exception, constatée en réel le 29/09/2026 : la marque porte une
+        # identité mais le pid actuel est illisible. Un propriétaire de notre
+        # compte reste toujours lisible ; un pid refusé (accès refusé) est un
+        # processus protégé ou d'un autre compte, donc un pid recyclé (ici
+        # AggregatorHost.exe) : le verrou d'avant le redémarrage bloquait le
+        # démarrage automatique, à jamais.
         meme_processus = (
             identite_enregistree is None
-            or identite_actuelle is None
-            or identite_actuelle == identite_enregistree
+            or (identite_actuelle is not None
+                and identite_actuelle == identite_enregistree)
         )
         if not (processus_vivant(pid_verrou) and meme_processus):
             # Propriétaire mort, ou pid recyclé par quelqu'un d'autre : purge
