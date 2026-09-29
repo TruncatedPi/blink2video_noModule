@@ -14,7 +14,10 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from zoneinfo import ZoneInfo
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # Python 3.8, édition Windows 7
+    from backports.zoneinfo import ZoneInfo
 
 RACINE = Path(__file__).parent
 
