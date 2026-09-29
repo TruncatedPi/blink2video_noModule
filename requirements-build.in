@@ -1,3 +1,8 @@
+# Verrou de construction (build.py, profil ordinaire) : les dépendances de
+# blink2video aux versions exactes de requirements.txt (contrainte -c), plus
+# ce qui ne sert qu'à construire le bundle ou qu'à son icône. Régénérer les
+# deux verrous ensemble (voir BUILD.md, « Dépendances »).
+-c requirements.txt
 -r requirements.in
 
 # Uniquement pour construire le bundle (build.py, profil ordinaire) : jamais
@@ -9,4 +14,4 @@ pyinstaller
 # nico579-commons ; Pillow sert aussi à convertir l'icône de l'exécutable.
 Pillow
 pystray
-nico579-commons
+nico579-commons>=0.3.1,<0.4

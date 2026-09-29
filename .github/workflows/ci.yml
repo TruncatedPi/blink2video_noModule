@@ -161,6 +161,18 @@ jobs:
           echo "ffmpeg embarqué : $embarque"
           "$embarque" -hide_banner -filters | grep -q drawtext             || { echo "le ffmpeg embarqué ne sait pas incruster de texte"; exit 1; }
 
+      # WebRTC est optionnel par construction (blink_webrtc.DISPONIBLE, repli
+      # sur MSE) : un bundle construit sans aiortc démarre sans la moindre
+      # erreur et ne parle jamais WebRTC, alors que c'est le réglage par
+      # défaut de la page. C'est ce qui est arrivé tant que
+      # requirements-build.txt datait d'avant lui. Diagnostic local (H.264,
+      # ICE, DTLS, SRTP en boucle locale), sans compte ni caméra.
+      - name: Vérifier que le bundle sait faire du WebRTC
+        shell: bash
+        env:
+          BLINK_HOME: ${{ runner.temp }}/blink-webrtc
+        run: ${{ matrix.exe }} smoketest --webrtc
+
       # imageio_ffmpeg ne fournit pas de build Linux avec libfreetype (voir
       # build.py, FFMPEG_SECOURS) : le secours téléchargé à la place embarque
       # ffprobe dans la même archive, extrait au passage. Sans lui,
@@ -220,3 +232,36 @@ jobs:
           done
           grep -q "blink2video" page.html || { echo "page inattendue"; docker logs blink2video-ci; exit 1; }
           docker stop blink2video-ci
+
+  # Chaque système de construction de release.yml (windows-latest,
+  # ubuntu-22.04, macos-latest) doit pouvoir installer les deux verrous, en
+  # roues, avec son Python 3.12 et son macOS 15 : un verrou régénéré qui
+  # choisirait une version sans roue pour l'un d'eux casserait sa
+  # construction le jour de la release. Aucune exception : un paquet qui
+  # n'aurait de roue que pour certains systèmes fait échouer ce job au lieu
+  # de passer inaperçu.
+  verrous:
+    name: Verrous des dependances
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Installer uv
+        run: python -m pip install --quiet uv==0.9.28
+
+      - name: Roues pour les trois systemes de construction
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "15.0"
+        run: |
+          for verrou in requirements.txt requirements-build.txt; do
+            for cible in x86_64-pc-windows-msvc x86_64-unknown-linux-gnu aarch64-apple-darwin; do
+              echo "== $verrou pour $cible"
+              uv pip compile "$verrou" --python-platform "$cible" --python-version 3.12 \
+                --only-binary :all: --no-header -q -o /tmp/roues.txt
+            done
+          done

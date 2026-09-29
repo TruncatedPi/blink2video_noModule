@@ -28,8 +28,9 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 SPEC = BASE_DIR / "blink2video.spec"
 
-# Profil ordinaire : verrouillé et à empreintes (requirements.in -> .txt via
-# pip-compile), même esprit que WIN7_REQUIREMENTS ci-dessous. blink_engine.py
+# Profil ordinaire : verrouillé et à empreintes (requirements-build.in -> .txt
+# via uv pip compile, voir l'en-tête de requirements.in), même esprit que
+# WIN7_REQUIREMENTS ci-dessous. blink_engine.py
 # rattrape une API privée de blinkpy (monkey-patch sur BlinkLiveStream) ;
 # une version flottante pourrait la casser en silence à la prochaine release.
 REQUIREMENTS = BASE_DIR / "requirements-build.txt"
