@@ -168,10 +168,12 @@ process.stdout.write(String({expression}));
                 self.assertEqual(self._evaluer(f'regroupable("{genre}")'), "false")
 
     def test_le_selecteur_disparait_avec_une_camera_et_revient_sans(self):
-        # render() cache le choix « Grouper par » d'après la même fonction que
-        # renderVideos() : les deux ne peuvent pas diverger.
+        # Le choix « Grouper par » se cache d'après la même fonction que
+        # renderVideos() : les deux ne peuvent pas diverger. Depuis l'issue #36
+        # (suite), majGroupBy() est le seul endroit qui pose l'attribut, appelé
+        # par render(), à l'ouverture du filtre et au changement de caméra.
         source = (Path(__file__).parent / "serve_app.js").read_text(encoding="utf-8")
-        self.assertIn('$("groupBySection").hidden = !regroupable(kind);', source)
+        self.assertIn('$("groupBySection").hidden = !regroupable($("view").value);', source)
         self.assertIn('regroupable(kind) && $("groupBy").value === "day"', source)
 
 

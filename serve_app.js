@@ -574,7 +574,7 @@ function render() {
   // regrouper par jour n'y changerait rien (issue #14 : "week and month
   // makes no sense" pour ce mode, dixit le rapporteur). Pas davantage avec
   // une caméra choisie (issue #37, voir regroupable()).
-  $("groupBySection").hidden = !regroupable(kind);
+  majGroupBy();
   $("filtreResume").textContent = carteClips ? resumeFiltre() : "";
   // Le décompte n'a de sens que pour clips/direct ; renderClips() le repose
   // à chaque rendu, mais quitter cette vue doit l'effacer, pas le laisser
@@ -2172,6 +2172,13 @@ function regroupable(kind) {
   return kind === "daily" && !$("camera").value;
 }
 
+// Le choix « Grouper par » suit la caméra tant que le panneau du filtre est
+// ouvert : décidé seulement au rendu, il n'apparaissait qu'après « Filtrer »
+// puis une réouverture du panneau (issue #36, suite).
+function majGroupBy() {
+  $("groupBySection").hidden = !regroupable($("view").value);
+}
+
 function renderVideos(kind) {
   const items = (videos[kind] || [])
     .filter((v) => !$("camera").value || v.camera === $("camera").value);
@@ -2443,6 +2450,7 @@ function ouvrirFiltre() {
   }
   $("rangeFrom").value = plageClips.depuis || "";
   $("rangeTo").value = plageClips.jusqua || "";
+  majGroupBy();
   $("filtre").showModal();
 }
 
@@ -2885,6 +2893,7 @@ $("reglages").addEventListener("cancel", (evenement) => {
 });
 
 $("filtreButton").onclick = ouvrirFiltre;
+$("camera").addEventListener("change", majGroupBy);
 $("filtreClose").onclick = () => $("filtre").close();
 $("filtreApply").onclick = appliquerFiltre;
 for (const bouton of document.querySelectorAll("#filtre .presets button")) {
