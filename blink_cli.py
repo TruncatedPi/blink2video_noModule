@@ -173,7 +173,6 @@ LIBELLES = {
         "ouverture_adresse": "Ouverture de {adresse}",
         "rien_ne_tourne": "Rien ne tourne.",
         "arret_instance": "Arrêt de « {commande} » (PID {pid}, depuis {depuis})",
-        "identite_pid_illisible": "  Identité du PID {pid} illisible : arrêt forcé ignoré.",
         "pid_reattribue":
             "  PID {pid} ne correspond plus à cette instance "
             "(numéro réattribué à un autre logiciel) : ignoré.",
@@ -269,7 +268,6 @@ LIBELLES = {
         "ouverture_adresse": "Opening {adresse}",
         "rien_ne_tourne": "Nothing is running.",
         "arret_instance": "Stopping « {commande} » (PID {pid}, since {depuis})",
-        "identite_pid_illisible": "  PID {pid} identity unreadable: forced stop skipped.",
         "pid_reattribue":
             "  PID {pid} no longer matches this instance "
             "(number reassigned to another program): skipped.",
@@ -467,7 +465,7 @@ def _arreter_instances() -> int:
             identites = {}
 
         def etat_processus(pid: int, marqueurs=None):
-            """True=même processus, False=terminé/recyclé, None=indécidable."""
+            """True=même processus, False=terminé/recyclé."""
             pid = int(pid)
             attendue = identites.get(str(pid))
             if not runtime.processus_vivant(pid):
@@ -477,9 +475,13 @@ def _arreter_instances() -> int:
                 # de commande (compatible PowerShell 2 dans runtime.py).
                 return runtime.processus_correspond(pid, marqueurs)
             actuelle = runtime.identite_processus(pid)
-            if actuelle is None:
-                return None
-            return actuelle == attendue
+            # Identité enregistrée mais PID illisible : un processus de notre
+            # compte reste toujours lisible, donc c'est un pid recyclé par un
+            # service protégé (accès refusé). Constaté le 29/09/2026 : la fiche
+            # d'avant un redémarrage citait un pid repris par AggregatorHost.exe,
+            # l'arrêt le comptait survivant et la mise à jour, après avoir déjà
+            # tué le reste, s'abandonnait sans rien relancer.
+            return actuelle is not None and actuelle == attendue
 
         membres = [int(pid) for pid in
                    [fiche["pid"], *(fiche.get("enfants") or [])]]
@@ -493,10 +495,8 @@ def _arreter_instances() -> int:
         # commande ne porte jamais « blink2video ».
         for pid_ffmpeg in travailleurs:
             etat = etat_processus(pid_ffmpeg, ["ffmpeg"])
-            if etat is True:
+            if etat:
                 runtime.arreter_processus(pid_ffmpeg, avec_descendance=True)
-            elif etat is None:
-                print(msg("identite_pid_illisible", pid=pid_ffmpeg))
 
         # Délai de grâce pour les membres Python (serve/watch/download/
         # merge) : le drapeau posé plus haut leur laisse la chance de sortir
@@ -524,9 +524,6 @@ def _arreter_instances() -> int:
             if not runtime.processus_vivant(int(membre)):
                 continue
             etat = etat_processus(membre)
-            if etat is None:
-                print(msg("identite_pid_illisible", pid=membre))
-                continue
             if not etat:
                 print(msg("pid_reattribue", pid=membre))
                 continue
@@ -543,7 +540,7 @@ def _arreter_instances() -> int:
         survivants = []
         for membre in [*membres, *travailleurs]:
             etat = etat_processus(membre, ["ffmpeg"] if membre in travailleurs else None)
-            if etat is True or etat is None:
+            if etat:
                 survivants.append(str(membre))
         if survivants:
             restants.extend(survivants)

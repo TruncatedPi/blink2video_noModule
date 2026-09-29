@@ -126,7 +126,8 @@ class TestsArretIncomplet(unittest.TestCase):
              mock.patch.object(blink_cli.runtime, "demander_arret") as demander, \
              mock.patch.object(blink_cli.runtime, "effacer_arret_demande") as effacer, \
              mock.patch.object(blink_cli.runtime, "processus_vivant", return_value=True), \
-             mock.patch.object(blink_cli.runtime, "identite_processus", return_value=None), \
+             mock.patch.object(blink_cli.runtime, "identite_processus",
+                               return_value="creation-attendue"), \
              mock.patch.object(blink_cli.runtime, "arreter_processus"), \
              mock.patch.object(blink_cli.time, "time", side_effect=lambda: horloge["t"]), \
              mock.patch.object(blink_cli.time, "sleep",
@@ -135,6 +136,34 @@ class TestsArretIncomplet(unittest.TestCase):
         self.assertEqual(code, 1)
         demander.assert_called_once()
         effacer.assert_not_called()
+
+    def test_pid_illisible_est_un_pid_recycle_pas_un_survivant(self):
+        """Règle inversée le 29/09/2026, avec l'accord de Nico : un PID dont
+        l'identité est illisible comptait comme survivant. Après un
+        redémarrage, la fiche périmée citait un pid repris par
+        AggregatorHost.exe (accès refusé) : `stop` échouait, et la mise à jour
+        qui l'appelle, ayant déjà tué le reste, s'abandonnait sans rien
+        relancer. Un processus de notre compte est toujours lisible."""
+        instance = {
+            "pid": 123, "depuis": "maintenant", "verbes": [["serve"]],
+            "enfants": [], "identites": {"123": "creation-attendue"},
+            "fiche": "inutilisee.json",
+        }
+        horloge = {"t": 0.0}
+        with mock.patch.object(blink_cli.runtime, "lire_instances",
+                               return_value=[instance]), \
+             mock.patch.object(blink_cli.runtime, "demander_arret"), \
+             mock.patch.object(blink_cli.runtime, "effacer_arret_demande") as effacer, \
+             mock.patch.object(blink_cli.runtime, "processus_vivant", return_value=True), \
+             mock.patch.object(blink_cli.runtime, "identite_processus", return_value=None), \
+             mock.patch.object(blink_cli.runtime, "arreter_processus") as arreter, \
+             mock.patch.object(blink_cli.time, "time", side_effect=lambda: horloge["t"]), \
+             mock.patch.object(blink_cli.time, "sleep",
+                               side_effect=lambda d: horloge.__setitem__("t", horloge["t"] + d)):
+            code = blink_cli._arreter_instances()
+        self.assertEqual(code, 0)
+        arreter.assert_not_called()
+        effacer.assert_called_once()
 
 
 class TestsSerialisationArret(unittest.TestCase):
