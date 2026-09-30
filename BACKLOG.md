@@ -696,3 +696,20 @@ l'utilisateur - et le lot d'optimisations, non urgentes.
   et qui entre en conflit avec les horaires de l'application Blink. Question
   posee a Markus : que fait sa solution quand une camera ne repond pas a
   l'heure d'armement. A ne construire que si la demande se repete.
+
+- **Webhooks pour scripts (issue #40) : etat des cameras et armement, a la
+  place d'un planning integre.**
+  Source : MarkusKress, issue #40, 2026-09-30, demande confirmee ("would
+  really be a nice feature", pour les utilisateurs avances qui scriptent leur
+  propre planification, chez lui ioBroker + Telegram). Precise l'entree sur
+  l'armement par horaire : au lieu d'un planning dans blink2video, exposer
+  des URL. (1) Etat de toutes les cameras en JSON (en ligne, arme, batterie
+  en statut ok/low et tension si Blink la donne, temperature, wifi,
+  firmware) : la page lit deja ces champs (describe_camera, serve.py).
+  (2) Armer/desarmer par camera et par Sync Module, avec un secret DISTINCT
+  de celui du webhook d'image (un desarmement a distance est plus sensible
+  qu'une photo). (3) Camera hors ligne : rendre son etat et une erreur nette
+  plutot qu'attendre un timeout. Hors de portee : la sonnerie de la
+  Doorbell, blinkpy n'a aucun evenement de sonnerie (verifie le 2026-09-30).
+  Reponse publiee, "pas cette semaine" ; a grouper avec les autres codages
+  de confort (Nico les traitera fin de semaine ou semaine suivante).
