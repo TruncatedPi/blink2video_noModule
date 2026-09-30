@@ -739,17 +739,19 @@ l'utilisateur - et le lot d'optimisations, non urgentes.
   temps BtbN garde ses archives datees ; si elles disparaissent, garder une
   copie de l'archive retenue dans une release du depot.
 
-- **Validation MP4 : test de non-regression sur un clip qui ressemble a un
-  vrai clip USB.**
+- **Validation MP4 : test de non-regression sur un vrai clip Blink USB.**
   Source : issue #49 (BjoernD000), 2026-09-30 ; decision de Nico le meme jour,
   semaine du 2026-10-05, avec la ligne de diagnostic du chemin USB. La CI n'a
   jamais vu ce bug, present depuis la 0.12.29 : le job « chaine video » a un
   vrai ffprobe (FFmpeg d'Ubuntu), mais ses clips sont fabriques par FFmpeg et
   n'ont pas l'unite d'acces H.264 sans image que produit le Sync Module, et
   les tests de valid_mp4_complet simulent la reponse de ffprobe au lieu de
-  l'executer. A faire : un petit clip synthetique (mire de test plus une
-  unite d'acces sans image, quelques Kio, rien de prive) sur lequel ffprobe
-  ecrit « missing picture in access unit », et un test en CI Linux qui passe
-  le vrai valid_mp4_complet sur ce clip (accepte) et sur une copie tronquee
-  (refusee). Les 104 clips reels de Nico restent dans la VM de test pour
+  l'executer. A faire (Nico : « c'est important d'avoir un vrai clip Blink
+  de test sur GitHub ») : un VRAI clip USB du Sync Module, enregistre expres
+  sur une scene neutre (mur, feuille de papier : rien de prive, le depot
+  est public), court (quelques secondes), verifie avant commit : ffprobe y
+  ecrit bien « missing picture in access unit ». Un clip cloud neutre en
+  plus pour comparer. Test en CI Linux : le vrai valid_mp4_complet sur ces
+  clips (acceptes) et sur des copies tronquees (refusees). Un clip
+  synthetique seulement si le vrai clip ne peut pas etre publie. Les 104 clips reels de Nico restent dans la VM de test pour
   comparer, jamais dans le depot (images privees, depot public).
