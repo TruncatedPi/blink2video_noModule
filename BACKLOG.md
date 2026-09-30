@@ -706,10 +706,14 @@ l'utilisateur - et le lot d'optimisations, non urgentes.
   des URL. (1) Etat de toutes les cameras en JSON (en ligne, arme, batterie
   en statut ok/low et tension si Blink la donne, temperature, wifi,
   firmware) : la page lit deja ces champs (describe_camera, serve.py).
-  (2) Armer/desarmer par camera et par Sync Module, avec un secret DISTINCT
-  de celui du webhook d'image (un desarmement a distance est plus sensible
-  qu'une photo). (3) Camera hors ligne : rendre son etat et une erreur nette
-  plutot qu'attendre un timeout. Hors de portee : la sonnerie de la
+  (2) Armer/desarmer par camera et par Sync Module, avec LE MEME secret que
+  le webhook d'image (decision du 2026-09-30 : j'avais propose un secret
+  distinct, Nico a suivi Markus, tout tourne sur sa machine et le risque est
+  le meme ; un secret separe reste facile a ajouter si ca gene un jour).
+  (3) Camera hors ligne : rendre son etat et une erreur nette plutot
+  qu'attendre un timeout. JSON : champs tels que Blink les donne, null
+  quand une camera ne les rapporte pas, dit dans la doc (Markus : les
+  capteurs ne rapportent pas tous les memes informations). Hors de portee : la sonnerie de la
   Doorbell, blinkpy n'a aucun evenement de sonnerie (verifie le 2026-09-30).
   Reponse publiee, "pas cette semaine" ; a grouper avec les autres codages
   de confort (Nico les traitera fin de semaine ou semaine suivante).
