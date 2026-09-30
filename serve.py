@@ -2410,13 +2410,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     for item in home.get(group) or []:
                         raw.setdefault(str(item.get("name") or "").strip(), []).append(item)
 
-                modules = {str(m.get("name") or "").strip(): m
+                modules = {str(m.get("network_id")): m
                            for m in (home.get("sync_modules") or [])}
                 systems = []
                 for name, sync in _blink.sync.items():
-                    module = modules.get(str(sync.name or "").strip()) or {}
-                    if not module and modules:
-                        module = list(modules.values())[0]
+                    module = modules.get(str(sync.network_id)) or {}
                     systems.append({
                         "name": name.strip(),
                         "key": system_key(name, sync),
