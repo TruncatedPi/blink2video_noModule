@@ -176,14 +176,15 @@ LIBELLES = {
         "destination": "  Destination : {output}",
         "incremental": "  Incrémental : {nouveaux} nouveau(x), {deja} déjà acquis.",
         "cloud_indisponible": "  Cloud indisponible : {type}: {erreur}",
-        "usb_echec": "    Échec : {type}: {erreur}",
+        "usb_echec": "    Échec de l’acquisition (exception).",
+        "usb_echec_etape": "    Échec de l’acquisition : étape={etape}, statut HTTP={statut}.",
         "sync_suppression_impossible":
             "    ! Suppression impossible sur le Sync Module ({type}) ; "
             "clip conservé là-bas.",
         "sync_supprime_auto": "    Supprimé du Sync Module (caméra en suppression automatique).",
         "sync_suppression_echec":
             "    ! Échec de la suppression sur le Sync Module (clip conservé là-bas).",
-        "usb_echec_final": "    Échec du téléchargement après plusieurs tentatives.",
+        "usb_echec_final": "    Échec du téléchargement.",
         "usb_termine":
             "  Terminé : {downloaded} téléchargé(s), {skipped} déjà présent(s), "
             "{failed} échec(s).",
@@ -215,14 +216,15 @@ LIBELLES = {
         "destination": "  Destination: {output}",
         "incremental": "  Incremental: {nouveaux} new, {deja} already acquired.",
         "cloud_indisponible": "  Cloud unavailable: {type}: {erreur}",
-        "usb_echec": "    Failed: {type}: {erreur}",
+        "usb_echec": "    Acquisition failed (exception).",
+        "usb_echec_etape": "    Acquisition failed: stage={etape}, HTTP status={statut}.",
         "sync_suppression_impossible":
             "    ! Could not delete from the Sync Module ({type}); "
             "clip kept there.",
         "sync_supprime_auto": "    Deleted from the Sync Module (camera set to auto-delete).",
         "sync_suppression_echec":
             "    ! Failed to delete from the Sync Module (clip kept there).",
-        "usb_echec_final": "    Download failed after several attempts.",
+        "usb_echec_final": "    Download failed.",
         "usb_termine":
             "  Done: {downloaded} downloaded, {skipped} already present, "
             "{failed} failed.",
@@ -355,6 +357,16 @@ class _ResultatPassage(NamedTuple):
     execute: bool
 
 
+def _signaler_echec_acquisition(etape: str, erreur=None) -> None:
+    try:
+        statut = getattr(erreur, "status", None)
+        if not isinstance(statut, int) or not 100 <= statut <= 599:
+            statut = "unknown"
+        print(msg("usb_echec_etape", etape=etape, statut=statut), flush=True)
+    except Exception:
+        pass
+
+
 async def download_clip(blink: Blink, clip, target: Path, overwrite: bool) -> str:
     """Prépare puis télécharge un clip, sans jamais le supprimer du hub.
 
@@ -362,25 +374,48 @@ async def download_clip(blink: Blink, clip, target: Path, overwrite: bool) -> st
     après coup : voir un_passage() et runtime.lire_suppression_auto()."""
     # Un fichier non inscrit trouvé au chemin attendu doit subir la même
     # validation approfondie qu'un nouveau transfert avant d'être adopté.
-    if target.exists() and md.valid_mp4_complet(target) and not overwrite:
-        return "skipped"
+    etape = "local"
+    try:
+        if target.exists():
+            etape = "validation"
+            if md.valid_mp4_complet(target) and not overwrite:
+                return "skipped"
+        etape = "local"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        partial = target.with_suffix(target.suffix + ".part")
+        partial.unlink(missing_ok=True)
+    except Exception as error:
+        _signaler_echec_acquisition(etape, error)
+        raise
 
-    target.parent.mkdir(parents=True, exist_ok=True)
-    partial = target.with_suffix(target.suffix + ".part")
-    partial.unlink(missing_ok=True)
-
+    etape = "preparation"
     try:
         prepared = await clip.prepare_download(blink)
-        if not prepared or not await clip.download_video(blink, str(partial)):
+        if not prepared:
+            _signaler_echec_acquisition(etape)
             return "failed"
+        etape = "transfer"
+        if not await clip.download_video(blink, str(partial)):
+            _signaler_echec_acquisition(etape)
+            return "failed"
+        etape = "validation"
         # La sonde parcourt les paquets du .part avant son renommage : un
         # ftyp/moov intact ne suffit pas si mdat a été écourté en transit.
         if not partial.exists() or not md.valid_mp4_complet(partial):
+            _signaler_echec_acquisition(etape)
             return "failed"
+        etape = "local"
         partial.replace(target)
         return "downloaded"
+    except Exception as error:
+        _signaler_echec_acquisition(etape, error)
+        raise
     finally:
-        partial.unlink(missing_ok=True)
+        try:
+            partial.unlink(missing_ok=True)
+        except Exception as error:
+            _signaler_echec_acquisition("local", error)
+            raise
 
 
 async def _inventorier_cloud(blink: Blink, args, output: Path,
@@ -932,8 +967,8 @@ async def un_passage(blink: Blink, args, modules: list) -> int:
                         resultat = await download_clip(
                             blink, clip, target, args.overwrite,
                         )
-                    except Exception as error:
-                        print(msg("usb_echec", type=type(error).__name__, erreur=error))
+                    except Exception:
+                        print(msg("usb_echec"))
                         resultat = "failed"
 
                     if resultat == "downloaded":
