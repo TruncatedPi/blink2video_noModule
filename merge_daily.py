@@ -411,6 +411,35 @@ def _outil_validation_media() -> tuple[str, str] | None:
         return None
 
 
+# Lignes que ffprobe écrit sur des clips pourtant intacts. Issue #49 : chaque
+# clip enregistré sur la clé USB d'un Sync Module contient une unité d'accès
+# H.264 sans image, que l'analyseur H.264 signale (« missing picture in access
+# unit with size 9 »), alors que la vidéo est complète ; les clips du cloud
+# n'en ont pas. Refusée comme une erreur, cette ligne faisait rejeter en
+# silence tous les clips USB partout où ffprobe est présent (paquet Linux
+# depuis la 0.12.29, image Docker, ffprobe installé sur le système). Mesuré
+# le 2026-09-30 sur 104 clips réels et 15 copies tronquées, avec le ffprobe du
+# paquet 0.15.4 et FFmpeg stable 8.1.3 : aucune coupure ne se signalait par
+# cette seule ligne, toujours accompagnée d'un « Invalid NAL unit size » ou
+# d'une erreur du conteneur, qui restent des motifs de refus.
+_BRUITS_FFPROBE = ("missing picture in access unit",)
+
+
+def _erreurs_ffprobe(stderr: str) -> list:
+    """Lignes d'erreur de ffprobe qui comptent, sans le bruit connu ci-dessus."""
+    erreurs = []
+    for ligne in (stderr or "").splitlines():
+        ligne = ligne.strip()
+        # « Last message repeated N times » répète la ligne précédente, déjà
+        # jugée pour elle-même : erreur si elle l'était, bruit sinon.
+        if not ligne or ligne.startswith("Last message repeated"):
+            continue
+        if any(bruit in ligne for bruit in _BRUITS_FFPROBE):
+            continue
+        erreurs.append(ligne)
+    return erreurs
+
+
 def valid_mp4_complet(path: Path) -> bool:
     """Vérifie un téléchargement entier avant de le publier ou le supprimer.
 
@@ -419,6 +448,8 @@ def valid_mp4_complet(path: Path) -> bool:
     vidéo : elle détecte notamment un ``mdat`` écourté malgré un ``ftyp`` et un
     ``moov`` encore lisibles. Faute de sonde, on échoue fermé afin qu'aucune
     source distante ne soit supprimée sur la foi d'un contrôle incomplet.
+    Toute ligne d'erreur de ffprobe fait refuser le fichier, sauf le bruit
+    connu des clips intacts (_BRUITS_FFPROBE).
     """
     if not valid_mp4(path):
         return False
@@ -451,7 +482,7 @@ def valid_mp4_complet(path: Path) -> bool:
     if resultat.returncode != 0:
         return False
     if genre == "ffprobe":
-        if (resultat.stderr or "").strip():
+        if _erreurs_ffprobe(resultat.stderr):
             return False
         nombres = [ligne.strip() for ligne in (resultat.stdout or "").splitlines()]
         try:

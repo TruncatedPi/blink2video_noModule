@@ -105,6 +105,49 @@ class TestsValidMp4(unittest.TestCase):
         ), mock.patch.object(merge_daily.runtime, "lancer", return_value=tronque):
             self.assertFalse(merge_daily.valid_mp4_complet(chemin))
 
+    def _sonde(self, stdout: str, stderr: str, returncode: int = 0) -> bool:
+        chemin = self.racine / "clip.mp4"
+        chemin.write_bytes(MP4_STRUCTUREL)
+        reponse = SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+        with mock.patch.object(
+            merge_daily, "_outil_validation_media", return_value=("ffprobe", "ffprobe"),
+        ), mock.patch.object(merge_daily.runtime, "lancer", return_value=reponse):
+            return merge_daily.valid_mp4_complet(chemin)
+
+    # Lignes réelles, capturées le 2026-09-30 avec le ffprobe du paquet Linux
+    # 0.15.4 sur de vrais clips Blink (issue #49).
+
+    def test_clip_usb_intact_accepte_malgre_le_bruit_de_l_analyseur_h264(self):
+        # Chaque clip USB du Sync Module : 922 paquets lus, code 0, et cette
+        # seule ligne. Refusée, elle faisait rejeter tous les clips USB.
+        self.assertTrue(self._sonde(
+            "922\n", "[h264 @ 0x5df4102b1480] missing picture in access unit with size 9\n"))
+
+    def test_bruit_repete_ou_venu_de_l_analyseur_reste_du_bruit(self):
+        self.assertTrue(self._sonde(
+            "331\n",
+            "[NULL @ 0x63ed87021880] missing picture in access unit with size 9\n"
+            "    Last message repeated 2 times\n"))
+
+    def test_clip_tronque_reste_refuse_meme_avec_le_bruit_connu(self):
+        # Copie coupée à 50 % : le même bruit, plus la vraie trace de la coupure.
+        self.assertFalse(self._sonde(
+            "369\n",
+            "[NULL @ 0x599bb886b880] missing picture in access unit with size 9\n"
+            "[h264 @ 0x59c11469e880] Invalid NAL unit size (3302 > 762).\n"))
+
+    def test_une_erreur_repetee_reste_une_erreur(self):
+        self.assertFalse(self._sonde(
+            "299\n",
+            "[h264 @ 0x5d890c6e7880] Invalid NAL unit size (2246 > 1500).\n"
+            "    Last message repeated 3 times\n"))
+
+    def test_toute_autre_ligne_d_erreur_fait_toujours_refuser(self):
+        # Échec fermé : seul le bruit connu est toléré, jamais une ligne inconnue.
+        self.assertFalse(self._sonde(
+            "451\n",
+            "[mov,mp4,m4a,3gp,3g2,mj2 @ 0x5d07d1bef880] stream 0, offset 0x2a3f1: partial file\n"))
+
 
 if __name__ == "__main__":
     unittest.main()
