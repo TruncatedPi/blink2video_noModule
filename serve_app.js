@@ -38,11 +38,17 @@ const avecJeton = (url) => `${url}${url.includes("?") ? "&" : "?"}token=${encode
 // JSON valide, même à 500). La seule récupération sensée est un
 // rechargement complet, qui obtient une page et un jeton frais (signalé
 // par cutthin sur Reddit, 2026-08-31).
+// Exception : 502/503/504. Un mandataire (Caddy, nginx...) répond ainsi à la
+// place du serveur tant qu'il redémarre, avec un corps vide ou HTML : ce
+// n'est pas un jeton périmé, le serveur est simplement absent. Recharger
+// alors ramenait la page d'erreur du navigateur, sans script pour la
+// relancer (issue #35, Caddy) ; c'est sonderRelance() qui recharge au retour.
 async function lireJSON(reponse) {
   try {
     return await reponse.json();
   } catch (erreur) {
-    if (erreur instanceof SyntaxError) location.reload();
+    const absent = reponse.status >= 502 && reponse.status <= 504;
+    if (erreur instanceof SyntaxError && !absent) location.reload();
     throw erreur;
   }
 }
