@@ -717,3 +717,24 @@ l'utilisateur - et le lot d'optimisations, non urgentes.
   Doorbell, blinkpy n'a aucun evenement de sonnerie (verifie le 2026-09-30).
   Reponse publiee, "pas cette semaine" ; a grouper avec les autres codages
   de confort (Nico les traitera fin de semaine ou semaine suivante).
+
+- **FFmpeg du paquet Linux : figer la version et verifier son empreinte.**
+  Source : analyse de l'issue #49 (BjoernD000), 2026-09-30 ; decision de Nico
+  le meme jour, a faire avec la 0.15.5 (semaine du 2026-10-05). Sous Windows
+  et macOS, ffmpeg vient de imageio-ffmpeg, fige par le verrou
+  (requirements-build.txt, 0.6.0 a empreintes). Sous Linux, celui de
+  imageio-ffmpeg n'a pas drawtext : build.py (FFMPEG_SECOURS) telecharge alors
+  a chaque construction la compilation nocturne de BtbN
+  (ffmpeg-master-latest-linux64-gpl), sans version fixee ni SHA-256 verifie,
+  et en tire aussi le ffprobe qui valide chaque clip telecharge. La 0.15.4
+  embarque ainsi N-126965-gd85cdd2597-20260929. Deux releases Linux
+  construites a un jour d'ecart peuvent donc livrer deux FFmpeg differents, et
+  le comportement change sans une ligne de code. Precedent : issue #10, 1041
+  clips sur 1041 refuses sous Linux seul, contourne en passant la validation a
+  ffprobe, cause jamais etablie. C'est aussi un executable telecharge a la
+  construction et livre aux utilisateurs sans verification d'empreinte. A
+  faire : pointer une archive precise (plutot une branche de release que
+  master) et verifier son SHA-256 avant extraction, comme les verrous d'uv le
+  font pour les dependances Python. A verifier avant de choisir : combien de
+  temps BtbN garde ses archives datees ; si elles disparaissent, garder une
+  copie de l'archive retenue dans une release du depot.
