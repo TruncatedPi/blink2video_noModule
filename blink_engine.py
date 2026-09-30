@@ -292,7 +292,7 @@ class _ProgressionTelechargement:
         if self.total:
             # État déterminé avant le premier transfert. INNER, dans serve.py,
             # interprète cette ligne comme exactement 0/total.
-            print(f"  [1/{self.total}] 0%")
+            print(f"  [1/{self.total}] 0%", flush=True)
 
     def _publier(self) -> None:
         runtime.travail(
@@ -303,7 +303,7 @@ class _ProgressionTelechargement:
     def commencer(self, nom: str) -> None:
         if self.total:
             position = min(self.fait + 1, self.total)
-            print(f"  [{position}/{self.total}] {nom}")
+            print(f"  [{position}/{self.total}] {nom}", flush=True)
         self._publier()
 
     def terminer(self) -> None:
@@ -313,7 +313,7 @@ class _ProgressionTelechargement:
         if self.total:
             # Publication explicite après le résultat : auparavant le dernier
             # état restait à N-1/N, puis le fichier disparaissait aussitôt.
-            print(f"  [{self.fait}/{self.total}] 100%")
+            print(f"  [{self.fait}/{self.total}] 100%", flush=True)
 
     def finir(self) -> None:
         """Garantit un dernier état N/N, même après une branche d'erreur."""
