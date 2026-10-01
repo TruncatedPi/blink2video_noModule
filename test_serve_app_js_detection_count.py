@@ -28,6 +28,6 @@ class TestsDetectionCount(unittest.TestCase):
                               "const nomsDirectsActifs = () => []; const h = v => v; "
                               "const cameraCard = () => '';\n" + code +
                               "\nrenderLive(); console.log(JSON.stringify(elements.count.textContent));")
-                    result = subprocess.run([node, "-e", script], capture_output=True,
+                    result = subprocess.run([node, "-"], input=script, capture_output=True,
                                             text=True, encoding="utf-8", check=True)
                     self.assertEqual(json.loads(result.stdout), expected)

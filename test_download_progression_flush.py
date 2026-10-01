@@ -8,7 +8,7 @@ import blink_engine
 class TestsProgressionFlush(unittest.TestCase):
     def test_each_progress_event_reaches_a_buffered_pipe(self):
         raw = io.BytesIO()
-        stream = io.TextIOWrapper(raw, encoding="utf-8")
+        stream = io.TextIOWrapper(raw, encoding="utf-8", newline="\n")
         with mock.patch.object(blink_engine.runtime, "travail"), mock.patch("sys.stdout", stream):
             progress = blink_engine._ProgressionTelechargement(2)
             self.assertEqual(raw.getvalue().decode("utf-8"), "  [1/2] 0%\n")
