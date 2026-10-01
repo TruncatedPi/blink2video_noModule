@@ -83,10 +83,14 @@ class TestsDiagnosticAcquisition(unittest.IsolatedAsyncioTestCase):
         for language in ('fr', 'en'):
             with mock.patch.object(blink_engine.runtime, 'lire_langue', return_value=language):
                 final = blink_engine.msg('usb_echec_final')
-                exception = blink_engine.msg('usb_echec')
+                exception = blink_engine.msg('usb_echec', type='RuntimeError')
+                gabarit = blink_engine.LIBELLES[language]['usb_echec']
             self.assertNotIn('attempt', final)
             self.assertNotIn('tentative', final)
+            # Seul le nom de la classe est imprimé, jamais le texte de l'erreur.
+            self.assertIn('RuntimeError', exception)
             self.assertNotIn('{', exception)
+            self.assertNotIn('{erreur}', gabarit)
 
     async def test_usb_exception_log_does_not_copy_private_exception_text(self):
         with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {"BLINK_HOME": folder}):

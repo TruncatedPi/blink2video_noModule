@@ -176,7 +176,7 @@ LIBELLES = {
         "destination": "  Destination : {output}",
         "incremental": "  Incrémental : {nouveaux} nouveau(x), {deja} déjà acquis.",
         "cloud_indisponible": "  Cloud indisponible : {type}: {erreur}",
-        "usb_echec": "    Échec de l’acquisition (exception).",
+        "usb_echec": "    Échec de l’acquisition (exception : {type}).",
         "usb_echec_etape": "    Échec de l’acquisition : étape={etape}, statut HTTP={statut}.",
         "sync_suppression_impossible":
             "    ! Suppression impossible sur le Sync Module ({type}) ; "
@@ -216,7 +216,7 @@ LIBELLES = {
         "destination": "  Destination: {output}",
         "incremental": "  Incremental: {nouveaux} new, {deja} already acquired.",
         "cloud_indisponible": "  Cloud unavailable: {type}: {erreur}",
-        "usb_echec": "    Acquisition failed (exception).",
+        "usb_echec": "    Acquisition failed (exception: {type}).",
         "usb_echec_etape": "    Acquisition failed: stage={etape}, HTTP status={statut}.",
         "sync_suppression_impossible":
             "    ! Could not delete from the Sync Module ({type}); "
@@ -967,8 +967,12 @@ async def un_passage(blink: Blink, args, modules: list) -> int:
                         resultat = await download_clip(
                             blink, clip, target, args.overwrite,
                         )
-                    except Exception:
-                        print(msg("usb_echec"))
+                    except Exception as error:
+                        # Le nom de la classe seulement : c'est du code, pas
+                        # une donnée. Le texte de l'exception peut contenir
+                        # une URL privée (identifiants de compte et de réseau),
+                        # jamais imprimée (PR #53).
+                        print(msg("usb_echec", type=type(error).__name__))
                         resultat = "failed"
 
                     if resultat == "downloaded":
