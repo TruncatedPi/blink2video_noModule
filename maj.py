@@ -1213,7 +1213,7 @@ def _finaliser(cible: Path) -> int:
     arret = runtime.lancer(_ligne(installe, "stop"), cwd=str(installe),
                            env=env_arret, stdin=subprocess.DEVNULL, check=False)
     if arret.returncode != 0:
-        print(msg("arret_echoue"), flush=True)
+        _conclure_sans_relance(msg("arret_echoue"))
         return 1
 
     # Les fichiers restent tenus quelques instants après la mort du processus,
@@ -1226,7 +1226,7 @@ def _finaliser(cible: Path) -> int:
             break
         time.sleep(1)
     else:
-        print(msg("instance_encore_active"), flush=True)
+        _conclure_sans_relance(msg("instance_encore_active"))
         return 1
 
     # Depuis les sources, « git pull » a déjà mis les fichiers en place : il n'y

@@ -765,6 +765,7 @@ let actualisationLocale = false;
 // la mise à jour conclut sans redémarrer (phase.update_noop) : sans ça, elle
 // attendrait un retour du serveur qui ne viendra jamais.
 let miseAJourAttente = null;
+let generationMaj = 0;
 
 // Le serveur ne connaît jamais la langue affichée (choix propre à chaque
 // onglet, en localStorage) : un libellé de phase arrive donc toujours en
@@ -804,6 +805,7 @@ function montrerTravail(travail) {
     const bouton = $("update");
     delete bouton.dataset.encours;
     bouton.disabled = false;
+    montrerMaj({ version: bouton.dataset.version });
     gelerPendantMaj(false);
   }
   const termine = !!travail.termine;
@@ -844,6 +846,7 @@ function montrerMaj(neuve) {
   const bouton = $("update");
   bouton.hidden = !(neuve && neuve.version);
   if (bouton.hidden || bouton.dataset.encours) return;
+  bouton.dataset.version = neuve.version;
   bouton.textContent = tf("update.installing", { version: neuve.version });
   bouton.title = tf("update.title", { version: neuve.version });
 }
@@ -894,6 +897,7 @@ async function sonderRelance(suivi) {
 }
 
 $("update").onclick = async () => {
+  const generation = ++generationMaj;
   const bouton = $("update");
   bouton.dataset.encours = "1";
   bouton.disabled = true;
@@ -905,6 +909,7 @@ $("update").onclick = async () => {
     alert(resultat.error);
     bouton.disabled = false;
     delete bouton.dataset.encours;
+    montrerMaj({ version: bouton.dataset.version });
     return;
   }
   gelerPendantMaj(true);
@@ -923,7 +928,7 @@ $("update").onclick = async () => {
   // processus mort avant de pouvoir écrire quoi que ce soit) : mieux vaut un
   // bouton qui se débloque sans explication qu'un bouton mort pour de bon.
   setTimeout(() => {
-    if (miseAJourAttente === null) return;
+    if (generation !== generationMaj || miseAJourAttente === null) return;
     clearInterval(miseAJourAttente);
     miseAJourAttente = null;
     bouton.disabled = false;
@@ -1007,9 +1012,11 @@ async function heuresDePassage() {
 }
 
 async function etatDuTravail() {
+  if ($("update").dataset.encours && miseAJourAttente === null) return;
+  const generation = generationMaj;
   try {
     const etat = await lireJSON(await fetch("/api/travail", { cache: "no-store" }));
-    montrerTravail(etat.travail);
+    if (generation === generationMaj) montrerTravail(etat.travail);
   } catch (erreur) { /* le prochain passage réessaiera */ }
 }
 

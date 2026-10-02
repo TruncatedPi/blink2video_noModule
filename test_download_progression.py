@@ -432,6 +432,70 @@ class ProgressionRuntimeTests(unittest.TestCase):
             self.assertEqual(runtime.travail_en_cours(), {})
             self.assertEqual(runtime.travail_affichable()["pid"], 101)
 
+    def test_conclusion_mise_a_jour_prioritaire_sur_telechargement(self):
+        for termine in (False, True):
+            with self.subTest(termine=termine), \
+                    mock.patch.object(runtime, "processus_vivant", return_value=True):
+                with mock.patch.object(runtime.os, "getpid", return_value=101):
+                    runtime.travail("Téléchargement", 1, 1, cle="phase.download_clips")
+                    if termine:
+                        runtime.fin_travail(conserver=10)
+                with mock.patch.object(runtime.os, "getpid", return_value=202):
+                    runtime.travail("Arrêt échoué", 1, 1, cle="phase.update_noop")
+                    runtime.fin_travail(conserver=10)
+
+                visible = runtime.travail_affichable()
+                self.assertEqual(visible["cle"], "phase.update_noop")
+                self.assertTrue(visible["termine"])
+                self.assertEqual(visible["actif"], not termine)
+                self.assertEqual(bool(runtime.travail_en_cours()), not termine)
+
+                with mock.patch.object(runtime.os, "getpid", return_value=202):
+                    runtime.fin_travail()
+                self.assertEqual(runtime.travail_affichable()["pid"], 101)
+
+    def test_reessai_retire_seulement_la_conclusion_de_mise_a_jour(self):
+        with mock.patch.object(runtime, "processus_vivant", return_value=True):
+            with mock.patch.object(runtime.os, "getpid", return_value=101):
+                runtime.travail("Téléchargement", 1, 1, cle="phase.download_clips")
+                runtime.fin_travail(conserver=10)
+            with mock.patch.object(runtime.os, "getpid", return_value=202):
+                runtime.travail("Arrêt échoué", 1, 1, cle="phase.update_noop")
+                runtime.fin_travail(conserver=10)
+            with mock.patch.object(runtime.os, "getpid", return_value=303):
+                runtime.travail("Assemblage", 0, 1, cle="phase.merge")
+            self.assertEqual(runtime.travail_affichable()["cle"], "phase.update_noop")
+
+            self.assertTrue(runtime.effacer_conclusion_travail("phase.update_noop"))
+
+            self.assertFalse(runtime._fichier_travail(202).exists())
+            self.assertTrue(runtime._fichier_travail(101).exists())
+            self.assertTrue(runtime._fichier_travail(303).exists())
+            visible = runtime.travail_affichable()
+            self.assertEqual(visible["cle"], "phase.download_clips")
+            self.assertTrue(visible["actif"])
+            self.assertEqual(runtime.travail_en_cours()["pid"], 303)
+
+    def test_reessai_refuse_si_la_conclusion_ne_peut_pas_etre_retiree(self):
+        runtime.travail("Arrêt échoué", 1, 1, cle="phase.update_noop")
+        runtime.fin_travail(conserver=10)
+        with mock.patch.object(runtime, "_supprimer_fiche_travail", return_value=False):
+            self.assertFalse(runtime.effacer_conclusion_travail("phase.update_noop"))
+        self.assertEqual(runtime.travail_affichable()["cle"], "phase.update_noop")
+
+    def test_purge_ordinaire_reste_sans_attente_pendant_un_reessai(self):
+        with mock.patch.object(runtime.os, "getpid", return_value=101):
+            runtime.travail("Assemblage", 0, 1, cle="phase.merge")
+        with mock.patch.object(runtime.os, "getpid", return_value=202):
+            runtime.travail("Arrêt échoué", 1, 1, cle="phase.update_noop")
+            runtime.fin_travail(conserver=10)
+        with mock.patch.object(runtime, "processus_vivant", return_value=False), \
+                mock.patch.object(runtime, "_supprimer_fiche_travail", return_value=True) as retirer:
+            self.assertTrue(runtime.effacer_conclusion_travail("phase.update_noop"))
+        attentes = {appel.args[1]["pid"]: appel.kwargs["attente"]
+                    for appel in retirer.call_args_list}
+        self.assertEqual(attentes, {101: 0, 202: 0.25})
+
     def test_echec_du_snapshot_terminal_ne_laisse_pas_un_faux_actif(self):
         runtime.travail(
             "Téléchargement des clips", 1, 1, cle="phase.download_clips",

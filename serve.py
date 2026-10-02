@@ -4718,6 +4718,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not neuve:
                 self.send_json({"error": "Aucune version plus récente."}, 409)
                 return
+            if not runtime.effacer_conclusion_travail("phase.update_noop"):
+                self.send_json({"error": "La conclusion de la mise à jour précédente est encore occupée. Réessayez."}, 409)
+                return
             # Détaché, et volontairement sans attendre : ce processus fait
             # partie de ce que la mise à jour va arrêter. Elle rend compte dans
             # maj.log, et la page attend simplement le retour du serveur.

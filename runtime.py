@@ -2267,16 +2267,17 @@ def _lire_fiche_travail(cible: Path) -> dict:
     return etat if isinstance(etat, dict) else {}
 
 
-def _supprimer_fiche_travail(cible: Path, attendu: dict, attente: float = 0) -> None:
+def _supprimer_fiche_travail(cible: Path, attendu: dict, attente: float = 0) -> bool:
     """Ne retire que la publication lue, sans pouvoir effacer le tick suivant."""
     try:
         with _verrou_travail(cible, attente=attente):
             if _lire_fiche_travail(cible) == attendu:
                 cible.unlink(missing_ok=True)
+        return True
     except (OSError, BusyError):
         # La purge peut attendre le prochain polling. Une fiche active ne
         # doit jamais être sacrifiée pour faire disparaître une ancienne fin.
-        pass
+        return False
 
 
 def travail(quoi: str, fait: float = 0, total: int = 0, cle: str | None = None) -> None:
@@ -2333,7 +2334,7 @@ def fin_travail(conserver: float = 0) -> None:
     _supprimer_fiche_travail(cible, etat, attente=0.25)
 
 
-def _etats_travail() -> tuple:
+def _etats_travail(retirer_conclusion: str | None = None) -> tuple:
     """Renvoie (actifs, terminés encore affichables), en purgeant les périmés."""
     import datetime as dt
 
@@ -2351,11 +2352,13 @@ def _etats_travail() -> tuple:
         etat = _lire_fiche_travail(fichier)
         perime = not etat
         termine = etat.get("termine") if etat else None
+        a_retirer = bool(termine and retirer_conclusion is not None
+                        and etat.get("cle") == retirer_conclusion)
         if termine:
             try:
                 fini = dt.datetime.fromisoformat(str(termine))
                 duree = float(etat.get("visible_secondes", TRAVAIL_TERMINE_VISIBLE))
-                perime = (maintenant - fini).total_seconds() > duree
+                perime = (maintenant - fini).total_seconds() > duree or a_retirer
             except (TypeError, ValueError):
                 perime = True
             if not perime:
@@ -2372,16 +2375,25 @@ def _etats_travail() -> tuple:
             if not perime:
                 actifs.append(etat)
         if perime:
-            _supprimer_fiche_travail(fichier, etat)
+            supprime = _supprimer_fiche_travail(fichier, etat, attente=0.25 if a_retirer else 0)
+            if a_retirer and not supprime:
+                termines.append(etat)
     return actifs, termines
 
 
+def effacer_conclusion_travail(cle: str) -> bool:
+    _, termines = _etats_travail(retirer_conclusion=cle)
+    return not any(etat.get("cle") == cle for etat in termines)
+
+
 def _priorite_travail(etat: dict, actif: bool) -> tuple:
-    """Le téléchargement reste visible face à un assemblage concurrent."""
+    """Conclusion de mise à jour, puis téléchargement, puis assemblage."""
     cle = str(etat.get("cle") or "")
     telechargement = cle in ("phase.inventory_clips", "phase.download_clips")
     # actif download > fin download > actif autre > fin autre
     categorie = (4 if actif else 3) if telechargement else (2 if actif else 1)
+    if cle == "phase.update_noop":
+        categorie = 5
     return categorie, str(etat.get("termine") or etat.get("depuis") or "")
 
 
