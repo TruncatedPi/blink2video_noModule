@@ -192,3 +192,7 @@
   #reglages .row-boutons { margin-top:0; justify-content:space-between; }
   #reglages .row-boutons button { flex:none; white-space:nowrap; padding:9px 12px; }
   #stopButton { border-color:var(--out); color:#ffb3ab; }
+  .pagination { display:flex; align-items:center; justify-content:center; gap:12px; margin:16px 0; flex-wrap:wrap; }
+  .pagination form { display:flex; align-items:center; gap:7px; }
+  .pagination input { width:5em; font:inherit; color:var(--text); background:var(--card);
+                      border:1px solid var(--line); border-radius:7px; padding:7px; }

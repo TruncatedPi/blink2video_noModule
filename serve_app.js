@@ -212,6 +212,11 @@ const I18N = {
     "clips.none.ever": "Aucun clip récupéré pour l'instant.<br>Le téléchargement tourne déjà en arrière-plan (clé USB toutes les 10 min, cloud toutes les minutes) : les clips apparaîtront ici sans rien faire. Vérifiez qu'une clé USB est branchée sur le module : sans elle, les enregistrements ne vont que dans le cloud de l'abonnement Blink, que cet outil ne lit pas.",
     "direct.none.ever": "Aucun enregistrement du direct pour l'instant.<br>Ouvrez Direct, cliquez sur Enregistrer pendant qu'une caméra joue : il apparaîtra ici.",
     "clips.window": "{m}/{total} clips",
+    "clips.previous": "Précédent", "clips.next": "Suivant",
+    "clips.first": "Première", "clips.last": "Dernière",
+    "clips.go.page": "Aller à la page", "clips.go": "Aller",
+    "clips.per.page": "Clips par page", "clips.all": "Tous",
+    "clips.page": "Page {page}/{pages} · {total} clips",
     "range.title": "Période",
     "range.today": "Aujourd'hui (24 h)", "range.week": "Cette semaine (7 j)",
     "range.month": "Ce mois-ci", "range.2months": "2 derniers mois",
@@ -389,6 +394,11 @@ const I18N = {
     "clips.none.ever": "No clip retrieved yet.<br>Download is already running in the background (USB every 10 min, cloud every minute): clips will appear here on their own. Check that a USB drive is plugged into the module: without it, recordings only go to the Blink subscription cloud, which this tool does not read.",
     "direct.none.ever": "No direct recording yet.<br>Open Direct, click Record while a camera is playing: it will appear here.",
     "clips.window": "{m}/{total} clips",
+    "clips.previous": "Previous", "clips.next": "Next",
+    "clips.first": "First", "clips.last": "Last",
+    "clips.go.page": "Go to page", "clips.go": "Go",
+    "clips.per.page": "Clips per page", "clips.all": "All",
+    "clips.page": "Page {page}/{pages} · {total} clips",
     "range.title": "Period",
     "range.today": "Today (24h)", "range.week": "This week (7d)",
     "range.month": "This month", "range.2months": "Last 2 months",
@@ -2127,12 +2137,68 @@ async function supprimerSnapshot(fichier, bouton) {
   }
 }
 
+const CLIPS_PAR_PAGE = 50;
+const TAILLES_PAGE_CLIPS = [25, 50, 100, 0];
+const CLE_TAILLE_PAGE_CLIPS = "blink2video.clipsParPage";
+let pageClips = 0;
+let clipsParPage = restaurerTaillePageClips();
+
+function restaurerTaillePageClips() {
+  try {
+    const taille = Number(localStorage.getItem(CLE_TAILLE_PAGE_CLIPS) ?? CLIPS_PAR_PAGE);
+    if (TAILLES_PAGE_CLIPS.includes(taille)) return taille;
+  } catch (erreur) {}
+  return CLIPS_PAR_PAGE;
+}
+
+function navigationClips(total, pages) {
+  const selecteur = `<label>${h(t("clips.per.page"))}
+    <select data-action="clip-page-size" data-direction="size">${TAILLES_PAGE_CLIPS.map((taille) => `<option value="${taille}" ${taille === clipsParPage ? "selected" : ""}>${taille || h(t("clips.all"))}</option>`).join("")}</select>
+  </label>`;
+  if (pages === 1) return total > CLIPS_PAR_PAGE ? `<div class="pagination">${selecteur}</div>` : "";
+  return `<nav class="pagination" aria-label="${h(tf("clips.page", { page: pageClips + 1, pages, total }))}">
+    ${selecteur}
+    <button data-action="clip-page" data-page="0" data-direction="first" ${pageClips === 0 ? "disabled" : ""}>${h(t("clips.first"))}</button>
+    <button data-action="clip-page" data-page="${pageClips - 1}" data-direction="previous" ${pageClips === 0 ? "disabled" : ""}>${h(t("clips.previous"))}</button>
+    <span>${h(tf("clips.page", { page: pageClips + 1, pages, total }))}</span>
+    <button data-action="clip-page" data-page="${pageClips + 1}" data-direction="next" ${pageClips === pages - 1 ? "disabled" : ""}>${h(t("clips.next"))}</button>
+    <button data-action="clip-page" data-page="${pages - 1}" data-direction="last" ${pageClips === pages - 1 ? "disabled" : ""}>${h(t("clips.last"))}</button>
+    <form data-action="clip-page-jump">
+      <label>${h(t("clips.go.page"))} <input name="page" type="number" min="1" max="${pages}" step="1" value="${pageClips + 1}" inputmode="numeric" required></label>
+      <button type="submit">${h(t("clips.go"))}</button>
+    </form>
+  </nav>`;
+}
+
+function changerPageClips(page, direction, taille = clipsParPage) {
+  if (page === pageClips && taille === clipsParPage) return;
+  for (const video of $("list").querySelectorAll("video")) {
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+  }
+  pageClips = page;
+  if (taille !== clipsParPage) {
+    try { localStorage.setItem(CLE_TAILLE_PAGE_CLIPS, String(taille)); } catch (erreur) {}
+  }
+  clipsParPage = taille;
+  renderClips();
+  $("list").scrollIntoView({ block: "start" });
+  const navigation = $("list").querySelector(".pagination");
+  const controle = navigation?.querySelector(`[data-direction="${direction}"]:not(:disabled)`)
+    || navigation?.querySelector('input[name="page"]');
+  controle?.focus({ preventScroll: true });
+}
+
 function renderClips() {
   // Propre au genre affiché (clip ou direct) : data.clips mélange les deux
   // depuis le 2026-09-04, ce récapitulatif ne doit pas compter l'autre vue.
   const kindAttendu = $("view").value === "direct" ? "direct" : "clip";
   const genre = data.clips.filter((c) => c.kind === kindAttendu);
   const clips = visible();
+  const taille = clipsParPage || Math.max(1, clips.length);
+  const pages = Math.max(1, Math.ceil(clips.length / taille));
+  pageClips = Math.max(0, Math.min(pageClips, pages - 1));
   // Pas de décompte ici : les clips sont sous les yeux, et trois nombres de
   // plus en haut de page ne disent rien qu'on cherchait.
   $("count").textContent = "";
@@ -2161,11 +2227,13 @@ function renderClips() {
       : `<p class="empty">${t(kindAttendu === "direct" ? "direct.none.ever" : "clips.none.ever")}</p>`;
     return;
   }
-  const days = [...new Set(clips.map((c) => c.day))];
-  $("list").innerHTML = days.map((day) => `
+  const tranche = clips.slice(pageClips * taille, (pageClips + 1) * taille);
+  const navigation = navigationClips(clips.length, pages);
+  const days = [...new Set(tranche.map((c) => c.day))];
+  $("list").innerHTML = navigation + days.map((day) => `
     <h2>${h(day)}</h2>
-    <div class="grid">${clips.filter((c) => c.day === day).map(card).join("")}</div>
-  `).join("");
+    <div class="grid">${tranche.filter((c) => c.day === day).map(card).join("")}</div>
+  `).join("") + navigation;
 }
 
 // « Grouper par » : le choix ne se pose que pour les journalières, et tant
@@ -2461,6 +2529,7 @@ function ouvrirFiltre() {
 }
 
 async function appliquerFiltre() {
+  pageClips = 0;
   if (plageEnAttente) plageClips = plageEnAttente;
   sauvegarderFiltre();
   $("filtre").close();
@@ -2738,7 +2807,7 @@ $("refresh").onclick = async () => {
   };
 };
 
-$("showOut").onchange = render;
+$("showOut").onchange = () => { pageClips = 0; render(); };
 // "view" a besoin de données fraîches, pas juste d'un nouveau rendu de ce qui
 // est déjà en mémoire : Clips, Clips Directs, Journalières, Hebdomadaires,
 // Mensuelles peuvent tous avoir changé pendant que l'onglet restait ouvert
@@ -2748,6 +2817,7 @@ $("showOut").onchange = render;
 // rechargement complet de la page). "live" n'en a pas besoin, il lit
 // `system` (loadSystem), jamais `data`/`videos`.
 $("view").onchange = () => {
+  pageClips = 0;
   if ($("view").value === "live") {
     rafraichirVignettes = true;
     render();
@@ -3281,6 +3351,9 @@ $("list").addEventListener("click", (event) => {
   if (!cible || !$("list").contains(cible)) return;
   const name = cible.dataset.name || "";
   switch (cible.dataset.action) {
+    case "clip-page":
+      changerPageClips(Number(cible.dataset.page), cible.dataset.direction);
+      break;
     case "arm":
       setArmed(cible.dataset.scope, name, cible.dataset.armed === "true");
       break;
@@ -3312,10 +3385,17 @@ $("list").addEventListener("click", (event) => {
       break;
   }
 });
+$("list").addEventListener("submit", (event) => {
+  if (event.target.dataset.action !== "clip-page-jump") return;
+  event.preventDefault();
+  changerPageClips(event.target.elements.page.valueAsNumber - 1);
+});
 $("list").addEventListener("change", (event) => {
   const cible = event.target.closest("[data-action]");
   if (!cible || !$("list").contains(cible)) return;
-  if (cible.dataset.action === "stage-exclusion") {
+  if (cible.dataset.action === "clip-page-size") {
+    changerPageClips(0, "size", Number(cible.value));
+  } else if (cible.dataset.action === "stage-exclusion") {
     stagerExclusion(cible.dataset.identity, cible.checked);
   } else if (cible.dataset.action === "stage-suppression") {
     stagerSuppression(cible.dataset.identity, cible.checked);
