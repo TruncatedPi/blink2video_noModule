@@ -781,3 +781,23 @@ l'utilisateur - et le lot d'optimisations, non urgentes.
   (verification par gdbus : enregistrement aupres du watcher, GetLayout, Event).
   A faire dans la vague de mutualisation sur la zone de notification, apres
   les codages de confort ; prototype dans la VM refuse pour l'instant (quota).
+
+- **Vignettes : les fabriquer au telechargement du clip, et ne pas travailler
+  pour une requete abandonnee.**
+  Source : test a froid de Joel sur la PR #59, 2026-10-02 (2 672 clips reels,
+  cache de vignettes vide). Avant le chargement paresseux : 2 672 requetes de
+  vignettes, 2 673 lancements de ffmpeg, 47 s de CPU, 83 s avant la derniere
+  reponse. La PR ramene cela a 12 requetes et 12 ffmpeg pour une ouverture, ce
+  qui regle le cas courant. Reste cote serveur : send_thumb() (serve.py)
+  fabrique chaque vignette a la demande par ffmpeg, au plus min(8, coeurs) a la
+  fois (THUMB_SLOTS), et chaque requete en attente occupe un fil du serveur et
+  une des six connexions HTTP/1.1 du navigateur. Il ne s'apercoit pas qu'un
+  client est parti : dans le defilement complet a froid de Joel, 359 requetes
+  de vignettes sans statut (annulees quand les lecteurs sont liberes) ont
+  garde leur place dans la file et fait travailler ffmpeg pour rien, et une
+  requete /api/status a echoue, absente a chaud (indice d'une famine, pas une
+  preuve). A faire : fabriquer la vignette au moment ou le clip est telecharge
+  (le cache est alors toujours chaud, la fabrication a la demande ne sert plus
+  qu'aux anciens clips), et ne pas lancer ffmpeg pour une requete dont le
+  client est parti ; a evaluer : une borne sur la file d'attente. Hors de la
+  PR #59, a faire apres les issues en cours.
