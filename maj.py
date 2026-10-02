@@ -40,6 +40,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 import runtime
+from blink_tls import contexte_tls
 
 LIBELLES = {
     "fr": {
@@ -349,7 +350,8 @@ def _interroger() -> dict:
         f"https://api.github.com/repos/{DEPOT}/releases/latest",
         headers={"Accept": "application/vnd.github+json",
                  "User-Agent": f"blink2video/{runtime.VERSION}"})
-    with urllib.request.urlopen(requete, timeout=10) as reponse:
+    with urllib.request.urlopen(requete, timeout=10,
+                                context=contexte_tls()) as reponse:
         return json.loads(reponse.read().decode("utf-8"))
 
 
@@ -512,7 +514,8 @@ def _lire_empreinte(url: str, nom_archive: str) -> str:
         raise OSError(msg("empreinte_url_etrangere"))
     requete = urllib.request.Request(
         url, headers={"User-Agent": f"blink2video/{runtime.VERSION}"})
-    with urllib.request.urlopen(requete, timeout=15) as reponse:
+    with urllib.request.urlopen(requete, timeout=15,
+                                context=contexte_tls()) as reponse:
         finale = getattr(reponse, "geturl", lambda: url)()
         if not _url_mise_a_jour_autorisee(finale):
             raise OSError(msg("empreinte_redirection"))
@@ -582,7 +585,8 @@ def _telecharger(url: str, destination: Path, taille: int, sha256: str) -> None:
         url, headers={"Accept": "application/octet-stream",
                       "User-Agent": f"blink2video/{runtime.VERSION}"})
     try:
-        with urllib.request.urlopen(requete, timeout=60) as reponse:
+        with urllib.request.urlopen(requete, timeout=60,
+                                    context=contexte_tls()) as reponse:
             finale = getattr(reponse, "geturl", lambda: url)()
             if not _url_mise_a_jour_autorisee(finale):
                 raise OSError(msg("archive_redirection"))

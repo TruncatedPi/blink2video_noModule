@@ -10,7 +10,10 @@ import contextlib
 import hashlib
 import io
 import os
+import ssl
 import stat
+import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -196,13 +199,56 @@ class SecuriteMiseAJourTests(unittest.TestCase):
         url = "https://github.com/nico579/blink2video/releases/download/v1.0.0/a.zip"
         reponse = _ReponseHTTP(contenu, url, len(contenu))
         destination = self.racine / "a.zip"
+        contexte = ssl.create_default_context()
 
-        with mock.patch.object(maj.urllib.request, "urlopen", return_value=reponse), \
+        with mock.patch.object(maj, "contexte_tls", return_value=contexte), \
+                mock.patch.object(maj.urllib.request, "urlopen", return_value=reponse) as ouvrir, \
                 mock.patch.object(maj.runtime, "travail"):
             maj._telecharger(url, destination, len(contenu),
                              hashlib.sha256(contenu).hexdigest())
 
         self.assertEqual(destination.read_bytes(), contenu)
+        self.assertIs(ouvrir.call_args.kwargs["context"], contexte)
+
+    def test_metadonnees_release_utilisent_le_contexte_tls(self):
+        contexte = ssl.create_default_context()
+        reponse = _ReponseHTTP(b'{"tag_name":"v1.0.0"}',
+                              "https://api.github.com/repos/nico579/blink2video/releases/latest")
+        with mock.patch.object(maj, "contexte_tls", return_value=contexte), \
+                mock.patch.object(maj.urllib.request, "urlopen", return_value=reponse) as ouvrir:
+            resultat = maj._interroger()
+        self.assertEqual(resultat["tag_name"], "v1.0.0")
+        self.assertIs(ouvrir.call_args.kwargs["context"], contexte)
+
+    def test_empreinte_utilise_le_contexte_tls(self):
+        contexte = ssl.create_default_context()
+        empreinte = "a" * 64
+        url = "https://github.com/nico579/blink2video/releases/download/v1.0.0/a.zip.sha256"
+        contenu = f"{empreinte} *a.zip\n".encode("ascii")
+        reponse = _ReponseHTTP(contenu, url, len(contenu))
+        with mock.patch.object(maj, "contexte_tls", return_value=contexte), \
+                mock.patch.object(maj.urllib.request, "urlopen", return_value=reponse) as ouvrir:
+            resultat = maj._lire_empreinte(url, "a.zip")
+        self.assertEqual(resultat, empreinte)
+        self.assertIs(ouvrir.call_args.kwargs["context"], contexte)
+
+    def test_contexte_tls_conserve_la_validation_et_un_magasin_ca(self):
+        contexte = maj.contexte_tls()
+        self.assertEqual(contexte.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(contexte.check_hostname)
+        self.assertGreater(contexte.cert_store_stats()["x509_ca"], 0)
+
+    def test_updater_reste_importable_sans_dependances(self):
+        code = (
+            "import maj, ssl, sys; contexte = maj.contexte_tls(); "
+            "assert 'certifi' not in sys.modules; "
+            "assert 'blink_auth' not in sys.modules; "
+            "assert contexte.verify_mode == ssl.CERT_REQUIRED; "
+            "assert contexte.check_hostname"
+        )
+        subprocess.run([sys.executable, "-S", "-c", code],
+                       cwd=Path(__file__).resolve().parent, capture_output=True,
+                       text=True, encoding="utf-8", timeout=15, check=True)
 
     def test_telechargement_efface_le_partiel_si_sha_incorrect(self):
         contenu = b"archive substituee"

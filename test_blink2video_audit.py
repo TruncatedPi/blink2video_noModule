@@ -496,6 +496,11 @@ class TestsDefautsSynchrones(BacASable):
             cafile="racines-certifi.pem"
         )
 
+    def test_contexte_tls_api_conserve_certificat_et_nom_hote(self):
+        contexte = blink_auth.contexte_tls()
+        self.assertEqual(contexte.verify_mode, blink_auth.ssl.CERT_REQUIRED)
+        self.assertTrue(contexte.check_hostname)
+
     def test_win7_session_tls_attend_la_fermeture_du_transport(self):
         """Python 3.8 : la boucle ne doit pas mourir avant le transport SSL."""
         session = mock.Mock()
