@@ -31,6 +31,8 @@ class TestsPaginationClips(unittest.TestCase):
         script = """
 (async () => {
 const transitions = [];
+const lifecycle = [];
+const ordre = [];
 const stockage = STOCKAGE;
 const localStorage = {
   getItem(k) { if (INDISPONIBLE) throw Error('storage'); return stockage[k] ?? null; },
@@ -50,6 +52,8 @@ for(let i=0;i<TOTAL;i++) data.clips.push({kind:'clip',identity:'clip-'+i,
   camera:i%2?'B':'A',cameraKey:'key',day:'2026-09-'+String(30-Math.floor(i/100)).padStart(2,'0'),
   time:'12:00',duration:5,excluded:i%5===0,excludedStaged:false,supprimerStaged:false});
 let videos, __chargementEnCours = null, _filtreCameraAppliquee = true;
+let nettoyerLecteursClips = () => { lifecycle.push('cleanup'); ordre.push('cleanup'); };
+const preparerLecteursClips = () => { lifecycle.push('prepare'); ordre.push('prepare'); };
 const _filtrePersiste = null;
 let plageClips = {preset:'all'}, plageEnAttente = null;
 const paramsPourPlage = () => '';
@@ -60,7 +64,7 @@ const majBoutonAppliquer = () => {}, chargerSnapshots = () => {};
 const render = () => renderClips();
 """.replace("TOTAL", str(total)).replace("STOCKAGE", json.dumps(stockage or {})).replace("INDISPONIBLE", str(stockage_indisponible).lower()) + self.constants + "\n" + self.code + "\n" + self.click + "\n" + self.submit + "\n" + self.change + "\n" + actions + """
 renderClips();
-console.log(JSON.stringify({html:$('list').innerHTML,page:pageClips,size:clipsParPage,transitions,stockage,
+console.log(JSON.stringify({html:$('list').innerHTML,page:pageClips,size:clipsParPage,transitions,lifecycle,ordre,stockage,
  selected:data.clips.filter(c=>c.excludedStaged||c.supprimerStaged).map(c=>c.identity)}));
 })().catch(e=>{console.error(e);process.exitCode=1;});
 """
@@ -74,7 +78,7 @@ console.log(JSON.stringify({html:$('list').innerHTML,page:pageClips,size:clipsPa
     def test_premiere_page_bornee_et_ordre_conserve(self):
         sortie = self.executer()
         self.assertEqual(self.identities(sortie), [f"clip-{i}" for i in range(50)])
-        self.assertEqual(sortie["html"].count('<video preload="none"'), 50)
+        self.assertEqual(sortie["html"].count('<div class="clip-player"'), 50)
         self.assertIn('&quot;pages&quot;:33', sortie["html"])
         self.assertEqual(sortie["size"], 50)
 
@@ -92,13 +96,10 @@ console.log(JSON.stringify({html:$('list').innerHTML,page:pageClips,size:clipsPa
             self.assertEqual(sortie["html"].count(f'<option value="{taille}" selected>'), 2)
 
     def test_taille_changee_sur_premiere_page_libere_les_joueurs(self):
-        sortie = self.executer("""
-$('list').querySelectorAll=()=>[{pause(){transitions.push('pause');},
-  removeAttribute(nom){transitions.push('remove:'+nom);},load(){transitions.push('load');}}];
-changerPageClips(0, 'size', 100);
-""")
+        sortie = self.executer("changerPageClips(0, 'size', 100);")
         self.assertEqual(len(self.identities(sortie)), 100)
-        self.assertEqual(sortie["transitions"], ['pause', 'remove:src', 'load'])
+        self.assertEqual(sortie["lifecycle"].count('cleanup'), 2)
+        self.assertEqual(sortie["lifecycle"].count('prepare'), 2)
 
     def test_derniere_page_pour_chaque_taille(self):
         for taille, page in ((50, 32), (100, 16)):
@@ -152,6 +153,7 @@ changerPageClips(0, 'size', 100);
     def test_meme_page_ne_coupe_pas_la_lecture(self):
         sortie = self.executer("$('list').querySelectorAll=()=>[{pause(){transitions.push('pause');}}]; changerPageClips(0);")
         self.assertEqual(sortie["transitions"], [])
+        self.assertEqual(sortie["lifecycle"], ['cleanup', 'prepare'])
 
     def test_focus_du_controle_apres_navigation(self):
         sortie = self.executer("""
@@ -163,15 +165,16 @@ changerPageClips(64, 'last');
 """)
         self.assertEqual(sortie["transitions"], ['[data-direction="last"]:not(:disabled)', 'input[name="page"]', 'focus'])
 
-    def test_lecture_arretee_avant_remplacement_des_cartes(self):
+    def test_nettoyage_avant_remplacement_des_cartes(self):
         sortie = self.executer("""
-$('list').querySelectorAll=()=>[{pause(){transitions.push('pause');},
-  removeAttribute(nom){transitions.push('remove:'+nom);},load(){transitions.push('load');}}];
 let html='';
-Object.defineProperty($('list'),'innerHTML',{get(){return html;},set(v){html=v;transitions.push('replace');}});
+Object.defineProperty($('list'),'innerHTML',{get(){return html;},set(v){html=v;transitions.push('replace');ordre.push('replace');}});
 changerPageClips(1);
 """)
-        self.assertEqual(sortie["transitions"][:4], ["pause", "remove:src", "load", "replace"])
+        self.assertEqual(sortie["transitions"], ["replace", "replace"])
+        self.assertEqual(sortie["ordre"], ["cleanup", "replace", "prepare", "cleanup", "replace", "prepare"])
+        self.assertEqual(sortie["lifecycle"].count('cleanup'), 2)
+        self.assertEqual(sortie["lifecycle"].count('prepare'), 2)
 
     def test_toutes_les_pages_couvrent_la_liste_sans_doublon(self):
         for page in range(2):
@@ -185,7 +188,7 @@ changerPageClips(1);
 
     def test_vue_directe_ne_compte_pas_les_detections(self):
         sortie = self.executer("data.clips[0].kind='direct'; $('view').value='direct';")
-        self.assertEqual(sortie["html"].count('<video'), 1)
+        self.assertEqual(sortie["html"].count('<div class="clip-player"'), 1)
         self.assertIn('/media/direct/clip-0', sortie["html"])
         self.assertNotIn("<nav", sortie["html"])
         self.assertNotIn('data-action="clip-page-size"', sortie["html"])
@@ -201,7 +204,7 @@ changerPageClips(1);
         self.assertEqual(len(self.identities(sortie)), 2)
         sortie = self.executer("pageClips=64; data.clips=[];")
         self.assertEqual(sortie["page"], 0)
-        self.assertNotIn('<video', sortie["html"])
+        self.assertNotIn('class="clip-player"', sortie["html"])
         self.assertIn('clips.none.ever', sortie["html"])
 
     def test_groupes_jour_limites_aux_cartes_affichees(self):

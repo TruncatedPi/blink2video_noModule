@@ -47,6 +47,7 @@
   .card { background:var(--card); border:1px solid var(--line); border-radius:10px;
           overflow:hidden; display:flex; flex-direction:column; }
   .card.out { opacity:.55; border-color:var(--out); }
+  .clip-player { aspect-ratio:16/9; background:#000; }
   video { width:100%; aspect-ratio:16/9; background:#000; display:block; }
   img.snapshot { width:100%; aspect-ratio:16/9; object-fit:cover; background:#000; display:block; }
   .meta { display:flex; align-items:center; gap:10px; padding:10px 12px; }

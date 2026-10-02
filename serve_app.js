@@ -596,6 +596,7 @@ function render() {
   // à chaque rendu, mais quitter cette vue doit l'effacer, pas le laisser
   // périmé derrière une autre vue.
   if (!carteClips) $("filtreCompte").textContent = "";
+  if (!carteClips) nettoyerLecteursClips();
   if (kind === "live") return renderLive();
   if (kind === "pictures") return renderPictures();
   return carteClips ? renderClips() : renderVideos(kind);
@@ -2142,6 +2143,7 @@ const TAILLES_PAGE_CLIPS = [25, 50, 100, 0];
 const CLE_TAILLE_PAGE_CLIPS = "blink2video.clipsParPage";
 let pageClips = 0;
 let clipsParPage = restaurerTaillePageClips();
+let nettoyerLecteursClips = () => {};
 
 function restaurerTaillePageClips() {
   try {
@@ -2172,11 +2174,6 @@ function navigationClips(total, pages) {
 
 function changerPageClips(page, direction, taille = clipsParPage) {
   if (page === pageClips && taille === clipsParPage) return;
-  for (const video of $("list").querySelectorAll("video")) {
-    video.pause();
-    video.removeAttribute("src");
-    video.load();
-  }
   pageClips = page;
   if (taille !== clipsParPage) {
     try { localStorage.setItem(CLE_TAILLE_PAGE_CLIPS, String(taille)); } catch (erreur) {}
@@ -2191,6 +2188,7 @@ function changerPageClips(page, direction, taille = clipsParPage) {
 }
 
 function renderClips() {
+  nettoyerLecteursClips();
   // Propre au genre affiché (clip ou direct) : data.clips mélange les deux
   // depuis le 2026-09-04, ce récapitulatif ne doit pas compter l'autre vue.
   const kindAttendu = $("view").value === "direct" ? "direct" : "clip";
@@ -2234,6 +2232,7 @@ function renderClips() {
     <h2>${h(day)}</h2>
     <div class="grid">${tranche.filter((c) => c.day === day).map(card).join("")}</div>
   `).join("") + navigation;
+  preparerLecteursClips();
 }
 
 // « Grouper par » : le choix ne se pose que pour les journalières, et tant
@@ -2356,6 +2355,91 @@ function videoCard(v, parJour = false) {
   </div>`;
 }
 
+function preparerLecteursClips() {
+  const liste = $("list");
+  const disponibles = [];
+  const etats = new Map([...liste.querySelectorAll(".clip-player")].map((zone) =>
+    [zone, { zone, proche: false, video: null, lecture: null }]));
+
+  function liberer(etat, forcer = false) {
+    const video = etat.video;
+    if (!video || (!forcer && (etat.proche || !video.paused
+        || etat.zone.contains(document.activeElement)
+        || document.pictureInPictureElement === video
+        || etat.zone.contains(document.fullscreenElement)))) return;
+    etat.lecture = {
+      temps: video.readyState ? video.currentTime : (etat.lecture?.temps || 0),
+      volume: video.volume, muet: video.muted, vitesse: video.playbackRate, boucle: video.loop,
+    };
+    etat.video = null;
+    etat.evenements.abort();
+    video.pause();
+    video.removeAttribute("src");
+    video.removeAttribute("poster");
+    video.load();
+    video.remove();
+    if (!forcer) disponibles.push(video);
+    etat.zone.tabIndex = 0;
+  }
+
+  function creer(etat) {
+    if (etat.video) return etat.video;
+    const video = disponibles.pop() || document.createElement("video");
+    etat.video = video;
+    etat.evenements = new AbortController();
+    const { signal } = etat.evenements;
+    video.preload = "none";
+    video.controls = true;
+    video.playsInline = true;
+    video.poster = etat.zone.dataset.poster;
+    video.src = etat.zone.dataset.src;
+    video.setAttribute("aria-label", etat.zone.getAttribute("aria-label"));
+    const lecture = etat.lecture;
+    video.volume = lecture?.volume ?? 1;
+    video.muted = lecture?.muet ?? false;
+    video.playbackRate = lecture?.vitesse ?? 1;
+    video.loop = lecture?.boucle ?? false;
+    if (lecture) {
+      video.addEventListener("loadedmetadata", () => { video.currentTime = lecture.temps; }, { once: true, signal });
+    }
+    video.addEventListener("pause", () => liberer(etat), { signal });
+    video.addEventListener("leavepictureinpicture", () => liberer(etat), { signal });
+    video.addEventListener("fullscreenchange", () => liberer(etat), { signal });
+    etat.zone.append(video);
+    etat.zone.tabIndex = -1;
+    return video;
+  }
+
+  const observation = new IntersectionObserver((entrees) => {
+    for (const entree of entrees) {
+      const etat = etats.get(entree.target);
+      etat.proche = entree.isIntersecting;
+      if (etat.proche) creer(etat);
+      else liberer(etat);
+    }
+  }, { rootMargin: "600px 0px" });
+  const focus = (event) => {
+    const etat = etats.get(event.target.closest(".clip-player"));
+    if (etat && event.target === etat.zone) creer(etat).focus({ preventScroll: true });
+  };
+  const quitterFocus = (event) => {
+    const etat = etats.get(event.target.closest(".clip-player"));
+    if (etat) queueMicrotask(() => liberer(etat));
+  };
+  liste.addEventListener("focusin", focus);
+  liste.addEventListener("focusout", quitterFocus);
+  for (const zone of etats.keys()) observation.observe(zone);
+  nettoyerLecteursClips = () => {
+    observation.disconnect();
+    observation.takeRecords();
+    liste.removeEventListener("focusin", focus);
+    liste.removeEventListener("focusout", quitterFocus);
+    for (const etat of etats.values()) liberer(etat, true);
+    disponibles.length = 0;
+    nettoyerLecteursClips = () => {};
+  };
+}
+
 function card(c) {
   const [an, mois, jour] = c.day.split("-");
   const ligne = [c.camera, duration(c.duration), `${jour}/${mois}/${an}`, c.time,
@@ -2365,9 +2449,9 @@ function card(c) {
   // /media|thumb/<kind>/<identity> pour les deux (2026-09-04, même
   // présentation demandée pour les enregistrements du direct).
   return `<div class="card ${c.excluded ? "out" : ""}">
-    <video preload="none" controls playsinline
-           poster="${h(avecJeton(`/thumb/${c.kind}/${encodeURI(c.identity)}`))}"
-           src="${h(avecJeton(`/media/${c.kind}/${encodeURI(c.identity)}`))}"></video>
+    <div class="clip-player" tabindex="0" aria-label="${h(ligne)}"
+         data-poster="${h(avecJeton(`/thumb/${c.kind}/${encodeURI(c.identity)}`))}"
+         data-src="${h(avecJeton(`/media/${c.kind}/${encodeURI(c.identity)}`))}"></div>
     <div class="meta">
       <div class="time line">${h(ligne)}</div>
       <label class="act" title="${h(t("clip.discard.title"))}">
