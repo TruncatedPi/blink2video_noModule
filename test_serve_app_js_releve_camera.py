@@ -42,7 +42,7 @@ class TestsReleveEtTemperature(unittest.TestCase):
     def executer(self, langue: str, expression: str):
         script = (f"let _lang = {json.dumps(langue)};\n" + self.code + "\n"
                   f"console.log(JSON.stringify({expression}));\n")
-        resultat = subprocess.run([self.node, "-e", script], capture_output=True,
+        resultat = subprocess.run([self.node, "-"], input=script, capture_output=True,
                                   text=True, encoding="utf-8", check=True)
         return json.loads(resultat.stdout)
 
