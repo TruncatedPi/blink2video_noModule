@@ -197,3 +197,95 @@
   .pagination form { display:flex; align-items:center; gap:7px; }
   .pagination input { width:5em; font:inherit; color:var(--text); background:var(--card);
                       border:1px solid var(--line); border-radius:7px; padding:7px; }
+
+  /* Doorbell alert banner (Feature 1) */
+  .doorbellAlertBanner {
+    position: sticky;
+    top: 57px;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 20px;
+    background: linear-gradient(90deg, #1f2e4d, #253966);
+    border-bottom: 2px solid #5a8fee;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), 0 0 12px rgba(90, 143, 238, 0.3);
+    animation: doorbellPulse 2s infinite ease-in-out;
+  }
+  @keyframes doorbellPulse {
+    0%, 100% { border-bottom-color: #5a8fee; }
+    50% { border-bottom-color: #92b7ff; }
+  }
+  .alertIcon {
+    font-size: 26px;
+    line-height: 1;
+    animation: bellRing 1.2s ease-in-out infinite;
+  }
+  @keyframes bellRing {
+    0%, 100% { transform: rotate(0); }
+    20%, 60% { transform: rotate(14deg); }
+    40%, 80% { transform: rotate(-14deg); }
+  }
+  .alertContent {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .alertTitle {
+    font-size: 15px;
+    font-weight: 700;
+    color: #fff;
+  }
+  .alertSubtitle {
+    font-size: 13px;
+    color: #c0d1f7;
+  }
+  .alertActions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .btnAlertRecord {
+    background: #c0392b !important;
+    border-color: #e74c3c !important;
+    color: #fff !important;
+    font-weight: 600 !important;
+  }
+  .btnAlertRecord:hover {
+    background: #e74c3c !important;
+  }
+  .btnAlertWatch {
+    background: #2980b9 !important;
+    border-color: #3498db !important;
+    color: #fff !important;
+  }
+  .btnAlertDismiss {
+    background: transparent !important;
+    border-color: var(--line) !important;
+    color: var(--dim) !important;
+  }
+  .btnAlertDismiss:hover {
+    color: #fff !important;
+    border-color: #666 !important;
+  }
+  .btnAlertHistory {
+    background: #34495e !important;
+    border-color: #4a627a !important;
+    color: #fff !important;
+  }
+  .btnAlertHistory:hover {
+    background: #4a627a !important;
+  }
+  .eventCard {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    transition: border-color 0.2s ease;
+  }
+  .eventCard:hover {
+    border-color: #5a8fee;
+  }
+
+

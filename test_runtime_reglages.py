@@ -98,7 +98,13 @@ class TestsReglages(unittest.TestCase):
              "font_size": 40, "font_color": "yellow", "box_opacity": 0.3,
              "trusted_host": "100.101.194.5",
              "webhook_notif_url": "https://exemple.invalid/notif",
-             "live_auto_stop_seconds": 0, "dossier_sorties": ""})
+             "live_auto_stop_seconds": 0,
+             "doorbell_alerts_enabled": True,
+             "doorbell_auto_record": False,
+             "doorbell_auto_record_seconds": 30,
+             "doorbell_chime_enabled": True,
+             "doorbell_poll_interval_seconds": 6,
+             "dossier_sorties": ""})
 
     def test_valeurs_partielles_completees_par_les_defauts(self):
         (self.dossier / runtime.REGLAGES).write_text(
@@ -121,6 +127,11 @@ class TestsReglages(unittest.TestCase):
              "trusted_host": runtime.REGLAGES_DEFAUT["trusted_host"],
              "webhook_notif_url": runtime.REGLAGES_DEFAUT["webhook_notif_url"],
              "live_auto_stop_seconds": runtime.REGLAGES_DEFAUT["live_auto_stop_seconds"],
+             "doorbell_alerts_enabled": runtime.REGLAGES_DEFAUT["doorbell_alerts_enabled"],
+             "doorbell_auto_record": runtime.REGLAGES_DEFAUT["doorbell_auto_record"],
+             "doorbell_auto_record_seconds": runtime.REGLAGES_DEFAUT["doorbell_auto_record_seconds"],
+             "doorbell_chime_enabled": runtime.REGLAGES_DEFAUT["doorbell_chime_enabled"],
+             "doorbell_poll_interval_seconds": runtime.REGLAGES_DEFAUT["doorbell_poll_interval_seconds"],
              "dossier_sorties": runtime.REGLAGES_DEFAUT["dossier_sorties"]})
 
     def test_fuseau_vide_dans_le_fichier_retombe_sur_le_defaut(self):

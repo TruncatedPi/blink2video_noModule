@@ -25,6 +25,11 @@ DEFAUTS = {
     "font_size": None, "font_color": "white", "box_opacity": 0.55,
     "trusted_host": "", "webhook_notif_url": "",
     "live_auto_stop_seconds": 0,
+    "doorbell_alerts_enabled": True,
+    "doorbell_auto_record": False,
+    "doorbell_auto_record_seconds": 30,
+    "doorbell_chime_enabled": True,
+    "doorbell_poll_interval_seconds": 6,
 }
 CHAMPS_BOOLEENS = (
     "timestamp", "merge_jour", "merge_semaine", "merge_mois", "download_auto")
@@ -120,6 +125,11 @@ class TestsValidationReglagesHttp(unittest.TestCase):
             "font_size": None, "font_color": "white", "box_opacity": 0.55,
             "trusted_host": "", "webhook_notif_url": "",
             "live_auto_stop_seconds": 0,
+            "doorbell_alerts_enabled": True,
+            "doorbell_auto_record": False,
+            "doorbell_auto_record_seconds": 30,
+            "doorbell_chime_enabled": True,
+            "doorbell_poll_interval_seconds": 6,
         }, "archives locales")
         self.chemin.assert_called_once_with("archives locales")
 

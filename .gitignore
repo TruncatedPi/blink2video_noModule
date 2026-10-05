@@ -63,3 +63,6 @@ essai_*.py
 
 # Ressource VERSIONINFO régénérée à chaque build par blink2video.spec.
 .version_info.txt
+
+# Local development virtual environment
+.venv/

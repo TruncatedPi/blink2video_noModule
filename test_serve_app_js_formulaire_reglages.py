@@ -21,6 +21,11 @@ REGLAGES = {
     "trusted_host": "100.101.194.5",
     "webhook_notif_url": "https://exemple.invalid/notif",
     "live_auto_stop_seconds": 300,
+    "doorbell_alerts_enabled": True,
+    "doorbell_auto_record": False,
+    "doorbell_auto_record_seconds": 30,
+    "doorbell_chime_enabled": True,
+    "doorbell_poll_interval_seconds": 6,
 }
 
 
@@ -65,6 +70,7 @@ const ids = [
   'initialSetupHint', 'reglagesClose', 'stopButton', 'reglages', 'reglagesButton',
   'webhookUrl', 'webhookRegenerer', 'fontSize', 'fontColor', 'boxOpacity',
   'trustedHost', 'webhookNotifUrl', 'liveAutoStopSeconds', 'redemarrerButton',
+  'doorbellAlertsEnabled', 'doorbellChimeEnabled', 'doorbellAutoRecord', 'doorbellAutoRecordSeconds',
   'tabGeneral', 'tabVideo', 'tabAcces', 'tabAlertes',
   'panelGeneral', 'panelVideo', 'panelAcces', 'panelAlertes',
 ];
@@ -185,10 +191,14 @@ function capturer() {
             "fontSize": "font_size", "fontColor": "font_color", "boxOpacity": "box_opacity",
             "trustedHost": "trusted_host", "webhookNotifUrl": "webhook_notif_url",
             "liveAutoStopSeconds": "live_auto_stop_seconds",
+            "doorbellAutoRecordSeconds": "doorbell_auto_record_seconds",
         }
         cases = {
             "timestamp": "timestamp", "mergeJour": "merge_jour", "mergeSemaine": "merge_semaine",
             "mergeMois": "merge_mois", "downloadAuto": "download_auto",
+            "doorbellAlertsEnabled": "doorbell_alerts_enabled",
+            "doorbellChimeEnabled": "doorbell_chime_enabled",
+            "doorbellAutoRecord": "doorbell_auto_record",
         }
         for protocole in ("webrtc", "mse"):
             with self.subTest(protocole=protocole):

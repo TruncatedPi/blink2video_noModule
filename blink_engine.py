@@ -859,6 +859,9 @@ async def un_passage(blink: Blink, args, modules: list) -> int:
             continue
         except RuntimeError as error:
             print(msg("indisponible", erreur=error))
+            # If the sync module/doorbell has no local storage enabled, skip it cleanly without failing the download run
+            if not getattr(sync, "_local_storage", {}).get("enabled"):
+                continue
             had_error = True
             continue
 

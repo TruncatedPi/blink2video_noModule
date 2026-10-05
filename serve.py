@@ -264,6 +264,145 @@ WEBRTC_START_MAX_SECONDS = (
     + blink_webrtc.NEGOCIATION_MAX_SECONDS + 5
 )
 
+# Doorbell events state and monitor (Feature 1: Doorbell event alerts and live recording)
+DOORBELL_EVENTS_FILE = Path(".blink_doorbell_events.json")
+
+
+def _charger_evenements_sonnette() -> list[dict]:
+    """Loads stored doorbell events from disk."""
+    try:
+        cible = runtime.app_dir() / DOORBELL_EVENTS_FILE
+        if cible.is_file():
+            data = json.loads(cible.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return data
+    except Exception:
+        pass
+    return []
+
+
+def _sauvegarder_evenements_sonnette(events: list[dict]) -> None:
+    """Saves doorbell events to disk atomically."""
+    try:
+        cible = runtime.app_dir() / DOORBELL_EVENTS_FILE
+        runtime._ecrire_texte_atomique(cible, json.dumps(events[-100:], indent=2))
+    except Exception:
+        pass
+
+
+DOORBELL_EVENTS: list[dict] = _charger_evenements_sonnette()
+DOORBELL_EVENTS_LOCK = threading.Lock()
+DOORBELL_LAST_SEEN_TIMESTAMPS: dict[str, str] = {}
+DOORBELL_LAST_EVENT_TIMES: dict[str, float] = {}
+DOORBELL_CONFIG_UPDATE_UNTIL: float = 0.0
+DOORBELL_MONITOR_STOP = threading.Event()
+DOORBELL_MONITOR_THREAD: threading.Thread | None = None
+DOORBELL_MAX_EVENTS = 100
+ENREGISTREMENT_DIRECT_ARME_JUSQU_A: float = 0.0
+
+
+async def _poll_doorbells_async(blink_instance) -> list[dict]:
+    """Poll doorbell configurations from Blink API and return their current states."""
+    await blink_instance.get_homescreen()
+    home = getattr(blink_instance, "homescreen", None) or {}
+    doorbells = home.get("doorbells") or []
+    snapshots = []
+    for db in doorbells:
+        cid = str(db.get("id"))
+        nid = str(db.get("network_id"))
+        name = str(db.get("name") or cid)
+        updated_at = str(db.get("updated_at") or "")
+        enabled = bool(db.get("enabled"))
+        status = str(db.get("status") or "")
+        snapshots.append({
+            "camera_id": cid,
+            "network_id": nid,
+            "camera_name": name,
+            "updated_at": updated_at,
+            "enabled": enabled,
+            "status": status,
+        })
+    return snapshots
+
+
+def _doorbell_monitor_loop() -> None:
+    """Background polling loop that detects doorbell ring and motion events."""
+    while not DOORBELL_MONITOR_STOP.is_set():
+        reglages = runtime.lire_reglages()
+        interval = max(2, int(reglages.get("doorbell_poll_interval_seconds", 6)))
+        if reglages.get("doorbell_alerts_enabled", True):
+            try:
+                snapshots = BLINK.call(_poll_doorbells_async, timeout=15)
+                if snapshots:
+                    for snap in snapshots:
+                        cid = snap["camera_id"]
+                        updated_at = snap["updated_at"]
+                        if not updated_at:
+                            continue
+                        with DOORBELL_EVENTS_LOCK:
+                            prev = DOORBELL_LAST_SEEN_TIMESTAMPS.get(cid)
+                            if prev is None:
+                                # First observation: initialize baseline timestamp without firing alert
+                                DOORBELL_LAST_SEEN_TIMESTAMPS[cid] = updated_at
+                            elif prev != updated_at:
+                                DOORBELL_LAST_SEEN_TIMESTAMPS[cid] = updated_at
+                                # Ignore timestamp updates caused by user/admin setting changes
+                                if time.time() < DOORBELL_CONFIG_UPDATE_UNTIL:
+                                    continue
+                                # Enforce cooldown to prevent duplicate rapid triggers
+                                last_time = DOORBELL_LAST_EVENT_TIMES.get(cid, 0.0)
+                                if time.time() - last_time < 12.0:
+                                    continue
+                                DOORBELL_LAST_EVENT_TIMES[cid] = time.time()
+                                event_type = "ring" if not snap.get("enabled") else "motion"
+                                title = (
+                                    f"Doorbell Ring: {snap['camera_name']}"
+                                    if event_type == "ring"
+                                    else f"Doorbell Motion: {snap['camera_name']}"
+                                )
+                                evt = {
+                                    "id": uuid.uuid4().hex,
+                                    "camera": snap["camera_name"],
+                                    "camera_id": cid,
+                                    "network_id": snap["network_id"],
+                                    "type": event_type,
+                                    "title": title,
+                                    "timestamp": updated_at,
+                                    "created_at": time.time(),
+                                    "acknowledged": False,
+                                }
+                                DOORBELL_EVENTS.append(evt)
+                                if len(DOORBELL_EVENTS) > DOORBELL_MAX_EVENTS:
+                                    DOORBELL_EVENTS.pop(0)
+                                _sauvegarder_evenements_sonnette(DOORBELL_EVENTS)
+                                if reglages.get("doorbell_auto_record"):
+                                    ENREGISTREMENT_DIRECT_ACTIF.set()
+                                    ENREGISTREMENT_DIRECT_ARME_JUSQU_A = time.time() + 60.0
+            except Exception:
+                pass
+        DOORBELL_MONITOR_STOP.wait(interval)
+
+
+def demarrer_moniteur_evenements() -> None:
+    """Starts the background doorbell event monitor thread."""
+    global DOORBELL_MONITOR_THREAD
+    DOORBELL_MONITOR_STOP.clear()
+    if DOORBELL_MONITOR_THREAD is None or not DOORBELL_MONITOR_THREAD.is_alive():
+        DOORBELL_MONITOR_THREAD = threading.Thread(
+            target=_doorbell_monitor_loop,
+            name="doorbell_event_monitor",
+            daemon=True,
+        )
+        DOORBELL_MONITOR_THREAD.start()
+
+
+def arreter_moniteur_evenements() -> None:
+    """Stops the background doorbell event monitor thread."""
+    DOORBELL_MONITOR_STOP.set()
+    if DOORBELL_MONITOR_THREAD is not None and DOORBELL_MONITOR_THREAD.is_alive():
+        DOORBELL_MONITOR_THREAD.join(timeout=2.0)
+
+
 
 def _purger_arrets_direct() -> None:
     """Appelé sous DIRECT_WEBRTC_SESSION_LOCK ; mémoire bornée."""
@@ -1862,6 +2001,25 @@ def _preparer_reglages_web(payload: dict) -> tuple[str, dict]:
             "direct).") from erreur
     reglages["live_auto_stop_seconds"] = live_auto_stop_seconds
 
+    # Doorbell alerts and recording settings (Feature 1)
+    reglages["doorbell_alerts_enabled"] = bool(payload.get("doorbell_alerts_enabled", True))
+    reglages["doorbell_auto_record"] = bool(payload.get("doorbell_auto_record", False))
+    try:
+        auto_record_sec = int(payload.get("doorbell_auto_record_seconds", 30) or 30)
+        if not 5 <= auto_record_sec <= LIVE_MAX_SECONDS:
+            auto_record_sec = 30
+    except (TypeError, ValueError):
+        auto_record_sec = 30
+    reglages["doorbell_auto_record_seconds"] = auto_record_sec
+    reglages["doorbell_chime_enabled"] = bool(payload.get("doorbell_chime_enabled", True))
+    try:
+        poll_interval_sec = int(payload.get("doorbell_poll_interval_seconds", 6) or 6)
+        if not 2 <= poll_interval_sec <= 60:
+            poll_interval_sec = 6
+    except (TypeError, ValueError):
+        poll_interval_sec = 6
+    reglages["doorbell_poll_interval_seconds"] = poll_interval_sec
+
     return dossier, reglages
 
 
@@ -2318,11 +2476,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # renvoie l'armement du module de synchronisation à la place de la
         # détection propre à la caméra (BlinkCameraMini.arm rend sync.arm).
         # Système armé plus détection coupée s'affichait donc « active ».
-        # motion_enabled est juste pour tous les modèles, et le champ
-        # `enabled` de l'écran d'accueil sert de recoupement.
-        enabled = camera.motion_enabled
+        # L'écran d'accueil est relu à chaque appel de system_state(), donc son
+        # champ `enabled` est toujours frais, avec fallback sur motion_enabled.
+        enabled = info.get("enabled")
         if enabled is None:
-            enabled = info.get("enabled")
+            enabled = camera.motion_enabled
 
         # Temperature brute de l'ecran d'accueil (Fahrenheit, comme Blink la
         # rapporte) : meme conversion que camera.temperature_c (blinkpy,
@@ -2444,14 +2602,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return state
 
     def set_armed(self, scope: str, identity: str, armed: bool) -> None:
+        global DOORBELL_CONFIG_UPDATE_UNTIL
+        DOORBELL_CONFIG_UPDATE_UNTIL = time.time() + 20.0
+
         def apply(blink):
             async def run(_blink=blink):
                 if scope == "system":
                     sync = BLINK.find_system(_blink, identity)
                     await sync.async_arm(armed)
+                    try:
+                        await sync.get_network_info()
+                    except Exception:
+                        pass
                     return
                 _, camera = BLINK.find_camera(_blink, identity)
                 await camera.async_arm(armed)
+                camera.motion_enabled = armed
             return run()
 
         BLINK.call(apply, timeout=60)
@@ -2862,7 +3028,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             _slot_pris("direct WebRTC", name)
             journal("direct WebRTC commence")
-            ENREGISTREMENT_DIRECT_ACTIF.clear()
+            if time.time() > ENREGISTREMENT_DIRECT_ARME_JUSQU_A and not runtime.lire_reglages().get("doorbell_auto_record"):
+                ENREGISTREMENT_DIRECT_ACTIF.clear()
+            else:
+                ENREGISTREMENT_DIRECT_ACTIF.set()
             _effacer_erreur_direct()
             holder["lock"] = blink_engine.hub_lock("direct", attente=ATTENTE_HUB_MAX_SECONDS)
             holder["lock"].__enter__()
@@ -3011,7 +3180,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         journaux_nettoyage: list = []
         try:
             _slot_pris("direct MSE", name)
-            ENREGISTREMENT_DIRECT_ACTIF.clear()
+            if time.time() > ENREGISTREMENT_DIRECT_ARME_JUSQU_A and not runtime.lire_reglages().get("doorbell_auto_record"):
+                ENREGISTREMENT_DIRECT_ACTIF.clear()
+            else:
+                ENREGISTREMENT_DIRECT_ACTIF.set()
             # Une tentative réellement admise remplace l'ancien diagnostic.
             # En particulier, un 409 ne doit jamais faire relire au navigateur
             # le 503 d'une tentative précédente de la même caméra.
@@ -3491,6 +3663,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if route.startswith("/live-mse/"):
             session_id = parse_qs(urlparse(self.path).query).get("session_id", [""])[0]
             self.send_live_mse(unquote(route[len("/live-mse/"):]), session_id)
+            return
+
+        if route == "/api/events":
+            reglages = runtime.lire_reglages()
+            query = parse_qs(urlparse(self.path).query)
+            try:
+                since = float(query.get("since", [0])[0]) if query.get("since") else 0.0
+            except (TypeError, ValueError):
+                since = 0.0
+            with DOORBELL_EVENTS_LOCK:
+                events = [e for e in DOORBELL_EVENTS if e.get("created_at", 0) >= since]
+                unacked = [e for e in DOORBELL_EVENTS if not e.get("acknowledged")]
+            self.send_json({
+                "events": events,
+                "unacknowledged": unacked,
+                "doorbell_alerts_enabled": bool(reglages.get("doorbell_alerts_enabled", True)),
+                "doorbell_auto_record": bool(reglages.get("doorbell_auto_record", False)),
+                "doorbell_auto_record_seconds": int(reglages.get("doorbell_auto_record_seconds", 30)),
+                "doorbell_chime_enabled": bool(reglages.get("doorbell_chime_enabled", True)),
+                "server_time": time.time(),
+            })
             return
 
         if route == "/api/live-error":
@@ -4283,6 +4476,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_error(code)
 
     def do_POST(self):
+        global ENREGISTREMENT_DIRECT_ARME_JUSQU_A
         if not self.hote_autorise() or not self.jeton_valide():
             self._refuser(403)
             return
@@ -4410,22 +4604,96 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_json({"token": runtime.regenerer_jeton_webhook()})
             return
 
+        if route == "/api/events/ack":
+            event_id = str(payload.get("event_id") or "")
+            ack_all = bool(payload.get("all", False))
+            with DOORBELL_EVENTS_LOCK:
+                for e in DOORBELL_EVENTS:
+                    if ack_all or (event_id and e.get("id") == event_id):
+                        e["acknowledged"] = True
+                _sauvegarder_evenements_sonnette(DOORBELL_EVENTS)
+            self.send_json({"ok": True})
+            return
+
+        if route == "/api/events/clear":
+            with DOORBELL_EVENTS_LOCK:
+                DOORBELL_EVENTS.clear()
+                _sauvegarder_evenements_sonnette(DOORBELL_EVENTS)
+            self.send_json({"ok": True})
+            return
+
+        if route == "/api/events/test":
+            camera_name = str(payload.get("camera") or "")
+            if not camera_name or camera_name in ("Doorbell", "Test Doorbell"):
+                try:
+                    state = self.system_state()
+                    real_cam = None
+                    for s in (state.get("systems") or []):
+                        for c in (s.get("cameras") or []):
+                            model = (c.get("model") or "").lower()
+                            kind = (c.get("kind") or "").lower()
+                            name_low = (c.get("name") or "").lower()
+                            if "lotus" in model or "lotus" in kind or "doorbell" in model or "doorbell" in name_low:
+                                real_cam = c.get("name")
+                                break
+                        if real_cam:
+                            break
+                    if not real_cam and state.get("systems") and state["systems"][0].get("cameras"):
+                        real_cam = state["systems"][0]["cameras"][0].get("name")
+                    camera_name = real_cam or "Doorbell"
+                except Exception:
+                    camera_name = "Doorbell"
+
+            now_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+            evt = {
+                "id": uuid.uuid4().hex,
+                "camera": camera_name,
+                "camera_id": "test_doorbell",
+                "network_id": "test_net",
+                "type": "ring",
+                "title": f"Doorbell Event: {camera_name}",
+                "timestamp": now_iso,
+                "created_at": time.time(),
+                "acknowledged": False,
+            }
+            with DOORBELL_EVENTS_LOCK:
+                DOORBELL_EVENTS.append(evt)
+                if len(DOORBELL_EVENTS) > DOORBELL_MAX_EVENTS:
+                    DOORBELL_EVENTS.pop(0)
+                _sauvegarder_evenements_sonnette(DOORBELL_EVENTS)
+            reglages = runtime.lire_reglages()
+            if reglages.get("doorbell_auto_record"):
+                ENREGISTREMENT_DIRECT_ACTIF.set()
+                ENREGISTREMENT_DIRECT_ARME_JUSQU_A = time.time() + 60.0
+            self.send_json({"ok": True, "event": evt})
+            return
+
         if route == "/api/direct-enregistrement":
             session_id = str(payload.get("session_id") or "")
+            actif_voulu = bool(payload.get("actif"))
             with DIRECT_WEBRTC_SESSION_LOCK:
                 holder = DIRECT_WEBRTC_SESSION.get("session")
-                autorise = (
-                    holder is not None and holder["session_id"] == session_id
-                    and not holder["arret"].is_set() and not holder["rendu"]
-                ) or (
-                    holder is None and not session_id
-                    and MODULE_SLOT_INFO.get("quoi") == "direct MSE"
-                )
+                if holder is not None:
+                    autorise = (
+                        (not session_id or holder["session_id"] == session_id)
+                        and not holder["arret"].is_set()
+                        and not holder["rendu"]
+                    )
+                    if session_id and holder["session_id"] != session_id:
+                        autorise = False
+                elif MODULE_SLOT_INFO.get("quoi") == "direct MSE":
+                    autorise = not session_id or session_id == "mse"
+                else:
+                    autorise = True
+
                 if autorise:
-                    if bool(payload.get("actif")):
+                    if actif_voulu:
                         ENREGISTREMENT_DIRECT_ACTIF.set()
+                        ENREGISTREMENT_DIRECT_ARME_JUSQU_A = time.time() + 60.0
                     else:
                         ENREGISTREMENT_DIRECT_ACTIF.clear()
+                        ENREGISTREMENT_DIRECT_ARME_JUSQU_A = 0.0
+
             if not autorise:
                 self.send_json({"error": "Cette session de direct n'est plus active."}, 409)
                 return
@@ -4539,6 +4807,7 @@ __CSS__
     <option value="weekly" data-i18n="view.weekly">Détections Hebdomadaires</option>
     <option value="monthly" data-i18n="view.monthly">Détections Mensuelles</option>
     <option value="pictures" data-i18n="view.pictures">Photos</option>
+    <option value="events" data-i18n="view.events">Événements Sonnette</option>
   </select>
   <button id="filtreButton" data-i18n="filtre.button" data-i18n-title="filtre.button.title"
           title="Filtrer">🔍 Filtre</button>
@@ -4560,6 +4829,19 @@ __CSS__
   </span>
   <div id="work"><span id="phase"></span><progress id="bar"></progress></div>
 </header>
+<div id="doorbellAlertBanner" class="doorbellAlertBanner" hidden>
+  <div class="alertIcon">🔔</div>
+  <div class="alertContent">
+    <div class="alertTitle" id="doorbellAlertTitle" data-i18n="doorbell.ring">Doorbell Ring!</div>
+    <div class="alertSubtitle" id="doorbellAlertSubtitle"></div>
+  </div>
+  <div class="alertActions">
+    <button type="button" class="btnAlertRecord primary" id="btnAlertRecord" data-i18n="doorbell.recordLive">📹 Record Live View</button>
+    <button type="button" class="btnAlertWatch" id="btnAlertWatch" data-i18n="doorbell.watchLive">👁️ Watch Live</button>
+    <button type="button" class="btnAlertHistory" id="btnAlertHistory" data-i18n="events.viewHistory">📋 History</button>
+    <button type="button" class="btnAlertDismiss" id="btnAlertDismiss" data-i18n="doorbell.dismiss">✕ Dismiss</button>
+  </div>
+</div>
 <main><div id="list"></div><pre id="log"></pre></main>
 
 <dialog id="auth">
@@ -4788,6 +5070,30 @@ __CSS__
               title="Une fois un clip téléchargé avec succès, il est supprimé de sa source (stockage local USB/microSD ou cloud de l'abonnement selon la caméra).">Suppression automatique après téléchargement</legend>
       <div id="suppressionAutoListe" class="ligneCoches sub tiny" data-i18n="suppressionAuto.loading">Chargement…</div>
     </fieldset>
+    <fieldset>
+      <legend data-i18n="reglages.doorbellSection">Alertes de sonnette (bouton et mouvement)</legend>
+      <div class="ligneCoches">
+        <label id="doorbellAlertsEnabledLabel">
+          <input type="checkbox" id="doorbellAlertsEnabled">
+          <span data-i18n="reglages.doorbellAlertsEnabled">Activer les alertes de sonnette</span>
+        </label>
+        <label id="doorbellChimeEnabledLabel">
+          <input type="checkbox" id="doorbellChimeEnabled">
+          <span data-i18n="reglages.doorbellChimeEnabled">Carillon sonore dans l'application</span>
+        </label>
+        <label id="doorbellAutoRecordLabel">
+          <input type="checkbox" id="doorbellAutoRecord">
+          <span data-i18n="reglages.doorbellAutoRecord">Enregistrement automatique du direct lors d'une alerte</span>
+        </label>
+      </div>
+      <div class="champCadence" style="margin-top:10px;">
+        <label for="doorbellAutoRecordSeconds" data-i18n="reglages.doorbellAutoRecordSeconds">Durée d'enregistrement auto (secondes)</label>
+        <input type="number" id="doorbellAutoRecordSeconds" min="5" max="300" placeholder="30">
+      </div>
+      <div style="margin-top: 8px;">
+        <button type="button" id="btnTestDoorbellAlert" data-i18n="doorbell.test">Tester l'alerte de sonnette</button>
+      </div>
+    </fieldset>
   </div>
   <div class="row row-boutons">
     <button class="primary" id="reglagesApply" data-i18n="reglages.apply"
@@ -4870,7 +5176,7 @@ PAGE = PAGE.replace(
 # La page est un gabarit constant, plein d'accolades CSS et JavaScript :
 # impossible d'en faire une f-string. Une substitution unique au chargement
 # suffit, et laisse le gabarit lisible.
-PAGE = PAGE.replace("__VERSION__", runtime.VERSION)
+PAGE = PAGE.replace("__VERSION__", runtime.version_affichee())
 # Le PID à côté de la version distingue en un coup d'œil un onglet resté
 # ouvert sur l'ancien processus de celui qui vient de repartir après un
 # redémarrage : les deux affichent la même page tant que l'onglet ne
@@ -5027,6 +5333,7 @@ def main() -> int:
     # limité au formulaire.
     if not args.initial_setup:
         veiller_sur_les_versions()
+        demarrer_moniteur_evenements()
     if args.open_browser:
         threading.Timer(0.5, webbrowser.open, [url]).start()
 
@@ -5045,6 +5352,7 @@ def main() -> int:
     except KeyboardInterrupt:
         print(msg("interruption_arret"))
     finally:
+        arreter_moniteur_evenements()
         server.server_close()
     return 0
 

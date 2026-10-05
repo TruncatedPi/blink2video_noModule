@@ -73,6 +73,12 @@ REGLAGES_DEFAUT = {"usb_minutes": 10, "cloud_minutes": 1, "port": 8765, "timesta
                    "font_size": None, "font_color": "white", "box_opacity": 0.55,
                    "trusted_host": "", "webhook_notif_url": "",
                    "live_auto_stop_seconds": 0,
+                   # Doorbell event alert and live recording settings
+                   "doorbell_alerts_enabled": True,
+                   "doorbell_auto_record": False,
+                   "doorbell_auto_record_seconds": 30,
+                   "doorbell_chime_enabled": True,
+                   "doorbell_poll_interval_seconds": 6,
                    # Vide : dossier par défaut, voir dossier_sorties().
                    "dossier_sorties": ""}
 # Remplace la variable d'environnement BLINK_DIRECT_WEBRTC (experimentale,
@@ -205,6 +211,21 @@ def lire_reglages() -> dict:
         "live_auto_stop_seconds": _entier_borne(
             valeurs, "live_auto_stop_seconds",
             REGLAGES_DEFAUT["live_auto_stop_seconds"], 0, 300),
+        "doorbell_alerts_enabled": _booleen(
+            valeurs, "doorbell_alerts_enabled",
+            REGLAGES_DEFAUT["doorbell_alerts_enabled"]),
+        "doorbell_auto_record": _booleen(
+            valeurs, "doorbell_auto_record",
+            REGLAGES_DEFAUT["doorbell_auto_record"]),
+        "doorbell_auto_record_seconds": _entier_borne(
+            valeurs, "doorbell_auto_record_seconds",
+            REGLAGES_DEFAUT["doorbell_auto_record_seconds"], 5, 300),
+        "doorbell_chime_enabled": _booleen(
+            valeurs, "doorbell_chime_enabled",
+            REGLAGES_DEFAUT["doorbell_chime_enabled"]),
+        "doorbell_poll_interval_seconds": _entier_borne(
+            valeurs, "doorbell_poll_interval_seconds",
+            REGLAGES_DEFAUT["doorbell_poll_interval_seconds"], 2, 60),
         "dossier_sorties": str(valeurs.get("dossier_sorties") or "").strip(),
     }
 
@@ -234,18 +255,38 @@ def ecrire_reglages(usb_minutes: int, cloud_minutes: int, port: int, timestamp: 
                     box_opacity: float = 0.55, trusted_host: str = "",
                     webhook_notif_url: str = "",
                     live_auto_stop_seconds: int = 0,
+                    doorbell_alerts_enabled: bool | None = None,
+                    doorbell_auto_record: bool | None = None,
+                    doorbell_auto_record_seconds: int | None = None,
+                    doorbell_chime_enabled: bool | None = None,
+                    doorbell_poll_interval_seconds: int | None = None,
                     dossier_sorties: str | None = None,
                     dossier: Path | None = None) -> None:
     cible = (app_dir() if dossier is None else dossier) / REGLAGES
+    try:
+        actuel = json.loads(cible.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        actuel = {}
+    if not isinstance(actuel, dict):
+        actuel = {}
+
     if dossier_sorties is None:
         # Absent de l'appel : garder celui déjà enregistré. Le remettre à vide
         # renverrait en silence les clips suivants vers le dossier par défaut.
-        try:
-            actuel = json.loads(cible.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            actuel = {}
-        dossier_sorties = str(actuel.get("dossier_sorties") or "") \
-            if isinstance(actuel, dict) else ""
+        dossier_sorties = str(actuel.get("dossier_sorties") or "")
+
+    # Preserve or set doorbell settings
+    if doorbell_alerts_enabled is None:
+        doorbell_alerts_enabled = actuel.get("doorbell_alerts_enabled", REGLAGES_DEFAUT["doorbell_alerts_enabled"])
+    if doorbell_auto_record is None:
+        doorbell_auto_record = actuel.get("doorbell_auto_record", REGLAGES_DEFAUT["doorbell_auto_record"])
+    if doorbell_auto_record_seconds is None:
+        doorbell_auto_record_seconds = actuel.get("doorbell_auto_record_seconds", REGLAGES_DEFAUT["doorbell_auto_record_seconds"])
+    if doorbell_chime_enabled is None:
+        doorbell_chime_enabled = actuel.get("doorbell_chime_enabled", REGLAGES_DEFAUT["doorbell_chime_enabled"])
+    if doorbell_poll_interval_seconds is None:
+        doorbell_poll_interval_seconds = actuel.get("doorbell_poll_interval_seconds", REGLAGES_DEFAUT["doorbell_poll_interval_seconds"])
+
     _ecrire_texte_atomique(cible, json.dumps({
         "usb_minutes": int(usb_minutes), "cloud_minutes": int(cloud_minutes),
         "port": int(port), "timestamp": bool(timestamp),
@@ -257,6 +298,11 @@ def ecrire_reglages(usb_minutes: int, cloud_minutes: int, port: int, timestamp: 
         "trusted_host": str(trusted_host).strip(),
         "webhook_notif_url": str(webhook_notif_url).strip(),
         "live_auto_stop_seconds": int(live_auto_stop_seconds),
+        "doorbell_alerts_enabled": bool(doorbell_alerts_enabled),
+        "doorbell_auto_record": bool(doorbell_auto_record),
+        "doorbell_auto_record_seconds": int(doorbell_auto_record_seconds),
+        "doorbell_chime_enabled": bool(doorbell_chime_enabled),
+        "doorbell_poll_interval_seconds": int(doorbell_poll_interval_seconds),
         "dossier_sorties": str(dossier_sorties).strip(),
     }))
 
@@ -989,10 +1035,33 @@ def build_windows7() -> bool:
     return frozen() and (resource_dir() / WINDOWS7_BUILD_MARKER).is_file()
 
 
+def git_commit_info() -> str:
+    """Returns short commit hash and commit timestamp if running in a git checkout."""
+    try:
+        root = Path(__file__).resolve().parent
+        cmd = ["git", "-C", str(root), "log", "-1", "--format=%h (%cd)", "--date=format:%Y-%m-%d %H:%M"]
+        res = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=2)
+        if res.returncode == 0 and res.stdout.strip():
+            info = res.stdout.strip()
+            diff = subprocess.run(
+                ["git", "-C", str(root), "status", "--porcelain"],
+                capture_output=True, text=True, check=False, timeout=2,
+            )
+            dirty = "+dev" if (diff.returncode == 0 and diff.stdout.strip()) else ""
+            parts = info.split(" ", 1)
+            if len(parts) == 2:
+                return f"-{parts[0]}{dirty} {parts[1]}"
+            return f"-{info}{dirty}"
+    except Exception:
+        pass
+    return ""
+
+
 def version_affichee() -> str:
-    """Version numérique stable, complétée par la saveur du bundle legacy."""
+    """Version numérique stable, complétée par commit git et saveur legacy."""
+    git_info = git_commit_info()
     suffixe = " (Windows 7 legacy)" if build_windows7() else ""
-    return VERSION + suffixe
+    return f"{VERSION}{git_info}{suffixe}"
 
 
 def est_relatif_a(chemin: Path, racine: Path) -> bool:

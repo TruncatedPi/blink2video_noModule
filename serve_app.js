@@ -247,6 +247,29 @@ const I18N = {
     "selection.partial": "{n} suppression(s) ont échoué ou n'ont rien trouvé à supprimer (déjà retiré ailleurs). Le reste de la sélection a été appliqué.",
     "refresh.starting": "Démarrage…", "refresh.errors": "Terminé avec des erreurs",
     "refresh.disconnected": "\\nConnexion interrompue.\\n",
+    "doorbell.ring": "Sonnette activée !",
+    "doorbell.motion": "Mouvement de sonnette détecté !",
+    "doorbell.recordLive": "📹 Enregistrer le direct",
+    "doorbell.watchLive": "👁️ Voir le direct",
+    "doorbell.dismiss": "✕ Ignorer",
+    "doorbell.justNow": "À l'instant",
+    "doorbell.test": "Tester l'alerte de sonnette",
+    "reglages.doorbellSection": "Alertes de sonnette (bouton et mouvement)",
+    "reglages.doorbellAlertsEnabled": "Activer les alertes de sonnette",
+    "reglages.doorbellChimeEnabled": "Carillon sonore dans l'application",
+    "reglages.doorbellAutoRecord": "Enregistrement automatique du direct lors d'une alerte",
+    "reglages.doorbellAutoRecordSeconds": "Durée d'enregistrement auto (secondes)",
+    "view.events": "Événements Sonnette",
+    "events.title": "Historique des événements de sonnette",
+    "events.empty": "Aucun événement de sonnette enregistré pour le moment.",
+    "events.ackAll": "Tout marquer comme lu",
+    "events.clear": "Effacer l'historique",
+    "events.clearConfirm": "Voulez-vous vraiment effacer l'historique des événements de sonnette ?",
+    "events.ring": "Sonnette activée",
+    "events.motion": "Mouvement détecté",
+    "events.unack": "Nouveau",
+    "events.viewHistory": "📋 Historique",
+    "events.unreadMany": "{n} non lus",
   },
   en: {
     "view.live": "Live Views", "view.direct": "Live Recordings",
@@ -429,6 +452,29 @@ const I18N = {
     "selection.partial": "{n} deletion(s) failed or found nothing to delete (already removed elsewhere). The rest of the selection was applied.",
     "refresh.starting": "Starting…", "refresh.errors": "Finished with errors",
     "refresh.disconnected": "\\nConnection lost.\\n",
+    "doorbell.ring": "Doorbell Ring!",
+    "doorbell.motion": "Doorbell Motion Detected!",
+    "doorbell.recordLive": "📹 Record Live View",
+    "doorbell.watchLive": "👁️ Watch Live",
+    "doorbell.dismiss": "✕ Dismiss",
+    "doorbell.justNow": "Just now",
+    "doorbell.test": "Test Doorbell Alert",
+    "reglages.doorbellSection": "Doorbell alerts (button and motion)",
+    "reglages.doorbellAlertsEnabled": "Enable doorbell alerts",
+    "reglages.doorbellChimeEnabled": "In-app audio chime",
+    "reglages.doorbellAutoRecord": "Automatically record live view on alert",
+    "reglages.doorbellAutoRecordSeconds": "Auto-record duration (seconds)",
+    "view.events": "Doorbell Events",
+    "events.title": "Doorbell Events History",
+    "events.empty": "No doorbell events recorded yet.",
+    "events.ackAll": "Acknowledge All",
+    "events.clear": "Clear History",
+    "events.clearConfirm": "Are you sure you want to clear the doorbell event history?",
+    "events.ring": "Doorbell Ring",
+    "events.motion": "Motion Detected",
+    "events.unack": "New",
+    "events.viewHistory": "📋 History",
+    "events.unreadMany": "{n} unread",
   },
 };
 let _lang = "fr";
@@ -583,7 +629,7 @@ function render() {
   // n'en a pas l'usage. La période, elle, vaut pour Clips et Clips Directs
   // (/api/clips, les deux depuis data.clips) : daily/weekly/monthly ne la
   // lisent toujours pas.
-  $("filtreButton").hidden = kind === "live";
+  $("filtreButton").hidden = kind === "live" || kind === "events";
   $("periodeSection").hidden = !carteClips;
   // Grouper par jour n'a de sens que pour les journalieres : hebdomadaires
   // et mensuelles n'ont qu'un seul fichier par semaine/mois et par camera,
@@ -599,6 +645,7 @@ function render() {
   if (!carteClips) nettoyerLecteursClips();
   if (kind === "live") return renderLive();
   if (kind === "pictures") return renderPictures();
+  if (kind === "events") return renderEvents();
   return carteClips ? renderClips() : renderVideos(kind);
 }
 
@@ -2907,6 +2954,11 @@ $("view").onchange = () => {
     render();
     return;
   }
+  if ($("view").value === "events") {
+    for (const name of nomsDirectsActifs()) stopWatch(name);
+    render();
+    return;
+  }
   // Quitter Direct retire ses vidéos du DOM : fermer aussi les sessions
   // et les réveils en attente avant de reconstruire une autre vue.
   for (const name of nomsDirectsActifs()) stopWatch(name);
@@ -2986,6 +3038,12 @@ function afficherFormulaireReglages(reglages) {
   appliquerDependanceMergeJour();
   $("downloadAuto").checked = reglages.download_auto;
   appliquerDependanceDownloadAuto();
+  if ($("doorbellAlertsEnabled")) {
+    $("doorbellAlertsEnabled").checked = reglages.doorbell_alerts_enabled ?? true;
+    $("doorbellChimeEnabled").checked = reglages.doorbell_chime_enabled ?? true;
+    $("doorbellAutoRecord").checked = reglages.doorbell_auto_record ?? false;
+    $("doorbellAutoRecordSeconds").value = reglages.doorbell_auto_record_seconds || 30;
+  }
   afficherUrlWebhook(reglages.webhook_token);
 }
 
@@ -3254,6 +3312,10 @@ async function envoyerFormulaireReglages({ usb, cloud, port, timezone }) {
       font_size: $("fontSize").value.trim() ? parseInt($("fontSize").value, 10) : null,
       font_color: $("fontColor").value.trim(),
       box_opacity: parseFloat($("boxOpacity").value),
+      doorbell_alerts_enabled: $("doorbellAlertsEnabled") ? $("doorbellAlertsEnabled").checked : true,
+      doorbell_chime_enabled: $("doorbellChimeEnabled") ? $("doorbellChimeEnabled").checked : true,
+      doorbell_auto_record: $("doorbellAutoRecord") ? $("doorbellAutoRecord").checked : false,
+      doorbell_auto_record_seconds: Number($("doorbellAutoRecordSeconds")?.value) || 30,
     }) });
   return lireJSON(reponse);
 }
@@ -3531,3 +3593,406 @@ load();
     }
   }
 })();
+
+// --- Doorbell event monitoring (Feature 1) ---
+
+let currentDoorbellEvent = null;
+let lastAlertedEventId = null;
+let doorbellAutoRecordTimer = null;
+
+// Synthesizes a two-tone chime (Ding-Dong) using Web Audio API
+function playDoorbellChime() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    if (ctx.state === "suspended") {
+      ctx.resume().catch(() => {});
+    }
+    const t0 = ctx.currentTime;
+
+    // First tone: D5 (587.33 Hz)
+    const osc1 = ctx.createOscillator();
+    const gain1 = ctx.createGain();
+    osc1.type = "sine";
+    osc1.frequency.setValueAtTime(587.33, t0);
+    gain1.gain.setValueAtTime(0.3, t0);
+    gain1.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.8);
+    osc1.connect(gain1);
+    gain1.connect(ctx.destination);
+    osc1.start(t0);
+    osc1.stop(t0 + 0.8);
+
+    // Second tone: A4 (440.00 Hz)
+    const osc2 = ctx.createOscillator();
+    const gain2 = ctx.createGain();
+    osc2.type = "sine";
+    osc2.frequency.setValueAtTime(440.0, t0 + 0.35);
+    gain2.gain.setValueAtTime(0.35, t0 + 0.35);
+    gain2.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.4);
+    osc2.connect(gain2);
+    gain2.connect(ctx.destination);
+    osc2.start(t0 + 0.35);
+    osc2.stop(t0 + 1.4);
+  } catch (err) {
+    // AudioContext may be blocked prior to user interaction
+  }
+}
+
+function cacherBandeauAlerte() {
+  const banner = $("doorbellAlertBanner");
+  if (banner) banner.hidden = true;
+  currentDoorbellEvent = null;
+}
+
+function montrerBandeauAlerte(evt, serverSettings) {
+  currentDoorbellEvent = evt;
+  const banner = $("doorbellAlertBanner");
+  if (!banner) return;
+  banner.hidden = false;
+
+  const titleEl = $("doorbellAlertTitle");
+  if (titleEl) {
+    titleEl.textContent = t(evt.type === "motion" ? "doorbell.motion" : "doorbell.ring");
+  }
+  const subEl = $("doorbellAlertSubtitle");
+  if (subEl) {
+    const timeStr = evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : t("doorbell.justNow");
+    subEl.textContent = `${evt.camera || "Doorbell"} · ${timeStr}`;
+  }
+
+  // Trigger sound, notification, and auto-record once per unique event ID
+  const lastAlerted = (typeof localStorage !== "undefined" ? localStorage.getItem("blink_last_alerted_event_id") : null) || lastAlertedEventId;
+  if (evt.id !== lastAlerted) {
+    if (typeof localStorage !== "undefined") {
+      try { localStorage.setItem("blink_last_alerted_event_id", evt.id); } catch (e) {}
+    }
+    lastAlertedEventId = evt.id;
+
+    // Only chime, notify desktop, and auto-record if event is fresh (within 90 seconds)
+    const eventTime = evt.timestamp ? new Date(evt.timestamp).getTime() : (evt.created_at ? evt.created_at * 1000 : Date.now());
+    const isFresh = Math.abs(Date.now() - eventTime) < 90000;
+
+    if (isFresh) {
+      if (serverSettings && serverSettings.doorbell_chime_enabled) {
+        playDoorbellChime();
+      }
+      if (typeof Notification !== "undefined") {
+        if (Notification.permission === "granted") {
+          new Notification(evt.title || t("doorbell.ring"), {
+            body: `${evt.camera} · ${t(evt.type === "motion" ? "doorbell.motion" : "doorbell.ring")}`,
+            icon: "/favicon.ico",
+          });
+        } else if (Notification.permission !== "denied") {
+          Notification.requestPermission().catch(() => {});
+        }
+      }
+      if (serverSettings && serverSettings.doorbell_auto_record) {
+        lancerEnregistrementDepuisAlerte(evt, serverSettings.doorbell_auto_record_seconds || 30);
+      }
+    }
+  }
+}
+
+async function trouverCleCamera(nomCamera) {
+  if (!system || !system.systems) {
+    try {
+      system = await lireJSON(await fetch("/api/system"));
+    } catch (e) {
+      return null;
+    }
+  }
+  if (!system || !system.systems) return null;
+  // Match exact name or key
+  for (const s of system.systems) {
+    for (const c of s.cameras) {
+      if (c.name === nomCamera || c.key === nomCamera) return c.key;
+    }
+  }
+  // Match camera containing "lotus" or "doorbell"
+  for (const s of system.systems) {
+    for (const c of s.cameras) {
+      const model = (c.model || "").toLowerCase();
+      const kind = (c.kind || "").toLowerCase();
+      const name = (c.name || "").toLowerCase();
+      if (model.includes("lotus") || kind.includes("lotus") || model.includes("doorbell") || name.includes("doorbell")) {
+        return c.key;
+      }
+    }
+  }
+  // Fallback to first camera
+  for (const s of system.systems) {
+    if (s.cameras && s.cameras.length > 0) return s.cameras[0].key;
+  }
+  return null;
+}
+
+async function ouvrirDirectCamera(nomCamera) {
+  if ($("view").value !== "live") {
+    $("view").value = "live";
+    pageClips = 0;
+    rafraichirVignettes = true;
+    render();
+  }
+  if (!system || !system.systems) {
+    await loadSystem(false);
+  }
+  const cle = await trouverCleCamera(nomCamera);
+  if (!cle) return null;
+  if (!nomsDirectsActifs().includes(cle)) {
+    // Start live stream in background without awaiting completion (watchLive runs until stopped)
+    watchLive(cle);
+  }
+  return cle;
+}
+
+async function lancerEnregistrementDepuisAlerte(evt, dureeAuto) {
+  const nomCamera = evt ? evt.camera : null;
+  // 1. Arm recording on server immediately
+  await fetch("/api/direct-enregistrement", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ actif: true }),
+  }).catch(() => {});
+
+  // 2. Open live stream
+  const cle = await ouvrirDirectCamera(nomCamera);
+  if (!cle) return;
+
+  // 3. Mark the record button as active once card is rendered
+  const maxAttente = 15000;
+  const t0 = performance.now();
+  const pollSession = setInterval(async () => {
+    const cadre = $("live-" + cssId(cle));
+    const recBtn = cadre?.querySelector('[data-action="toggle-record"]');
+    if (recBtn || (performance.now() - t0 > maxAttente)) {
+      if (recBtn) {
+        appliquerEtatEnregistrement(recBtn, true);
+      }
+      clearInterval(pollSession);
+    }
+  }, 400);
+
+  // 4. Auto-stop timer if configured
+  if (dureeAuto > 0) {
+    if (doorbellAutoRecordTimer) clearTimeout(doorbellAutoRecordTimer);
+    doorbellAutoRecordTimer = setTimeout(() => {
+      stopWatch(cle);
+    }, dureeAuto * 1000);
+  }
+}
+
+// Banner action buttons
+if ($("btnAlertDismiss")) {
+  $("btnAlertDismiss").onclick = async () => {
+    if (currentDoorbellEvent) {
+      await fetch("/api/events/ack", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event_id: currentDoorbellEvent.id }),
+      }).catch(() => {});
+    }
+    cacherBandeauAlerte();
+  };
+}
+
+if ($("btnAlertHistory")) {
+  $("btnAlertHistory").onclick = () => {
+    $("view").value = "events";
+    pageClips = 0;
+    render();
+  };
+}
+
+if ($("btnAlertWatch")) {
+  $("btnAlertWatch").onclick = async () => {
+    const evt = currentDoorbellEvent;
+    if (evt) {
+      await fetch("/api/events/ack", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event_id: evt.id }),
+      }).catch(() => {});
+    }
+    cacherBandeauAlerte();
+    await ouvrirDirectCamera(evt ? evt.camera : null);
+  };
+}
+
+if ($("btnAlertRecord")) {
+  $("btnAlertRecord").onclick = async () => {
+    const evt = currentDoorbellEvent;
+    if (evt) {
+      await fetch("/api/events/ack", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event_id: evt.id }),
+      }).catch(() => {});
+    }
+    cacherBandeauAlerte();
+    await lancerEnregistrementDepuisAlerte(evt, 0);
+  };
+}
+
+// Test alert button in settings dialog
+if ($("btnTestDoorbellAlert")) {
+  $("btnTestDoorbellAlert").onclick = async () => {
+    try {
+      await fetch("/api/events/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ camera: "Doorbell" }),
+      });
+    } catch (err) {
+      console.error("Test doorbell alert failed:", err);
+    }
+  };
+}
+
+// Historical events view rendering
+async function renderEvents() {
+  $("count").textContent = "";
+  $("list").innerHTML = `<p class="empty">${t("sourdine.loading")}</p>`;
+  try {
+    const res = await fetch("/api/events");
+    const data = await lireJSON(res);
+    const events = (data.events || []).slice().reverse();
+    if (!events.length) {
+      $("list").innerHTML = `
+        <div style="padding: 20px; text-align: center;">
+          <p class="empty">${t("events.empty")}</p>
+          <div style="margin-top: 15px;">
+            <button type="button" id="btnEventsTest" class="primary">${t("doorbell.test")}</button>
+          </div>
+        </div>`;
+      $("btnEventsTest")?.addEventListener("click", () => $("btnTestDoorbellAlert")?.click());
+      return;
+    }
+    $("count").textContent = `${events.length} event(s)`;
+    const rows = events.map(evt => {
+      const isUnack = !evt.acknowledged;
+      const isRing = evt.type === "ring";
+      const icon = isRing ? "🔔" : "🚶";
+      const dateStr = evt.timestamp ? new Date(evt.timestamp).toLocaleString() : "";
+      const typeLabel = t(isRing ? "events.ring" : "events.motion");
+      const unackBadge = isUnack ? `<span class="badgeNew" style="background:#e74c3c;color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:bold;margin-left:8px;">${t("events.unack")}</span>` : "";
+
+      return `
+        <div class="card eventCard" style="display:flex; flex-direction:row; align-items:center; justify-content:space-between; padding:14px 20px; margin-bottom:10px; gap:16px;">
+          <div style="display:flex; align-items:center; gap:14px;">
+            <span style="font-size:24px;">${icon}</span>
+            <div>
+              <div style="font-size:15px; font-weight:600; color:#fff;">
+                ${h(typeLabel)} · ${h(evt.camera)} ${unackBadge}
+              </div>
+              <div class="sub" style="font-size:12px; color:var(--dim); margin-top:3px;">
+                ${h(dateStr)}
+              </div>
+            </div>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <button type="button" class="act in" data-action="event-record" data-camera="${h(evt.camera)}" data-id="${h(evt.id)}">${t("doorbell.recordLive")}</button>
+            <button type="button" class="act" data-action="event-watch" data-camera="${h(evt.camera)}" data-id="${h(evt.id)}">${t("doorbell.watchLive")}</button>
+            ${isUnack ? `<button type="button" class="act out" data-action="event-ack" data-id="${h(evt.id)}">✓</button>` : ""}
+          </div>
+        </div>`;
+    }).join("");
+
+    $("list").innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; flex-wrap:wrap; gap:10px;">
+        <h2 style="margin:0;">${t("events.title")}</h2>
+        <div style="display:flex; gap:8px;">
+          <button type="button" id="btnEventsAckAll" class="act in">${t("events.ackAll")}</button>
+          <button type="button" id="btnEventsClear" class="act out">${t("events.clear")}</button>
+          <button type="button" id="btnEventsTest" class="act">${t("doorbell.test")}</button>
+        </div>
+      </div>
+      <div class="eventsList">${rows}</div>`;
+
+    $("btnEventsAckAll")?.addEventListener("click", async () => {
+      await fetch("/api/events/ack", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ all: true })
+      });
+      cacherBandeauAlerte();
+      renderEvents();
+    });
+
+    $("btnEventsClear")?.addEventListener("click", async () => {
+      if (!confirm(t("events.clearConfirm"))) return;
+      await fetch("/api/events/clear", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: "{}"
+      });
+      cacherBandeauAlerte();
+      renderEvents();
+    });
+
+    $("btnEventsTest")?.addEventListener("click", async () => {
+      $("btnTestDoorbellAlert")?.click();
+      setTimeout(renderEvents, 600);
+    });
+
+    $("list").querySelectorAll('[data-action="event-ack"]').forEach(btn => {
+      btn.onclick = async () => {
+        await fetch("/api/events/ack", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ event_id: btn.dataset.id })
+        });
+        renderEvents();
+      };
+    });
+
+    $("list").querySelectorAll('[data-action="event-watch"]').forEach(btn => {
+      btn.onclick = async () => {
+        await fetch("/api/events/ack", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ event_id: btn.dataset.id })
+        }).catch(() => {});
+        cacherBandeauAlerte();
+        await ouvrirDirectCamera(btn.dataset.camera);
+      };
+    });
+
+    $("list").querySelectorAll('[data-action="event-record"]').forEach(btn => {
+      btn.onclick = async () => {
+        await fetch("/api/events/ack", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ event_id: btn.dataset.id })
+        }).catch(() => {});
+        cacherBandeauAlerte();
+        await lancerEnregistrementDepuisAlerte({ camera: btn.dataset.camera }, 0);
+      };
+    });
+
+  } catch (err) {
+    $("list").innerHTML = `<p class="empty">${h(String(err))}</p>`;
+  }
+}
+
+// Background doorbell event polling loop
+(function veillerEvenementsSonnette() {
+  setTimeout(async () => {
+    try {
+      const res = await fetch("/api/events");
+      if (res.ok) {
+        const payload = await lireJSON(res);
+        if (payload && payload.doorbell_alerts_enabled) {
+          const unacked = payload.unacknowledged || [];
+          if (unacked.length > 0) {
+            montrerBandeauAlerte(unacked[unacked.length - 1], payload);
+          } else {
+            cacherBandeauAlerte();
+          }
+        } else {
+          cacherBandeauAlerte();
+        }
+      }
+    } catch (e) {
+      // Ignore background network errors
+    }
+    veillerEvenementsSonnette();
+  }, 3000);
+})();
+
+
