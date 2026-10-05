@@ -801,3 +801,7 @@ l'utilisateur - et le lot d'optimisations, non urgentes.
   qu'aux anciens clips), et ne pas lancer ffmpeg pour une requete dont le
   client est parti ; a evaluer : une borne sur la file d'attente. Hors de la
   PR #59, a faire apres les issues en cours.
+  FAIT le 2026-10-05 : plus de ffmpeg pour une requete dont le navigateur est
+  parti (serve._client_parti, controle apres l'attente du creneau). RESTE :
+  fabriquer la vignette au telechargement du clip, et une borne sur la file ;
+  le test a froid de Joel sur les vrais clips dira s'ils sont encore utiles.

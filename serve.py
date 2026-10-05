@@ -33,6 +33,8 @@ import mimetypes
 import os
 import queue
 import re
+import select
+import socket
 import subprocess
 import tempfile
 import threading
@@ -2252,6 +2254,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return  # l'utilisateur a changé de clip, c'est normal
                 remaining -= len(chunk)
 
+    def _client_parti(self) -> bool:
+        """Vrai si le navigateur a déjà fermé sa connexion (requête annulée).
+
+        Une page qui défile vite libère ses lecteurs, et le navigateur annule
+        les vignettes qu'il avait demandées (359 requêtes sans statut dans le
+        test à froid de Joël, PR #59) ; le serveur ne le sait pas, fabriquait
+        quand même chacune par ffmpeg, et ces requêtes gardaient leur place
+        dans la file des extractions. Un octet lisible qui est la requête
+        suivante d'une connexion persistante n'est pas un départ : seul un
+        flux fermé (lecture vide) l'est."""
+        try:
+            lisibles, _, _ = select.select([self.connection], [], [], 0)
+            if not lisibles:
+                return False
+            return self.connection.recv(1, socket.MSG_PEEK) == b""
+        except (OSError, ValueError, TypeError, AttributeError):
+            return True
+
     def send_thumb(self, route: str, source: Path) -> None:
         """Sert la miniature d'un clip, en la fabriquant à la première demande.
 
@@ -2283,6 +2303,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     # toutes les vignettes de la page d'un coup, et autant de
                     # ffmpeg simultanés saturerait la machine pour rien.
                     with THUMB_SLOTS:
+                        # Après l'attente du créneau, avant le travail : le
+                        # client a pu partir pendant la file (voir _client_parti).
+                        if self._client_parti():
+                            self.close_connection = True
+                            return
                         runtime.lancer(
                             [self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
                              # -ss avant -i : ffmpeg saute directement à la position
