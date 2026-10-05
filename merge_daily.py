@@ -440,22 +440,31 @@ def _erreurs_ffprobe(stderr: str) -> list:
     return erreurs
 
 
-def valid_mp4_complet(path: Path) -> bool:
-    """Vérifie un téléchargement entier avant de le publier ou le supprimer.
+def _ligne_sans_donnee_privee(ligne: str, path: Path) -> str:
+    """Une ligne d'erreur de la sonde, sans chemin, nom de fichier ni adresse.
 
-    La vérification structurelle élimine les réponses HTML et les fichiers
-    tronqués au niveau d'une boîte. Une sonde parcourt ensuite tous les paquets
-    vidéo : elle détecte notamment un ``mdat`` écourté malgré un ``ftyp`` et un
-    ``moov`` encore lisibles. Faute de sonde, on échoue fermé afin qu'aucune
-    source distante ne soit supprimée sur la foi d'un contrôle incomplet.
-    Toute ligne d'erreur de ffprobe fait refuser le fichier, sauf le bruit
-    connu des clips intacts (_BRUITS_FFPROBE).
-    """
+    ffprobe cite parfois le fichier (« /chemin/clip.mp4: Invalid data ... ») ;
+    la raison d'un refus est imprimée dans le journal, que les utilisateurs
+    collent dans les issues publiques : jamais de chemin ni de nom de clip."""
+    for morceau in sorted({str(path), path.name, str(path.parent)}, key=len, reverse=True):
+        if morceau:
+            ligne = ligne.replace(morceau, "<fichier>")
+    ligne = re.sub(r"@ 0x[0-9a-fA-F]+", "@ ADR", ligne)
+    ligne = re.sub(r"[A-Za-z]:[\\/][^\s:]*|/[^\s:]+/[^\s:]*", "<chemin>", ligne)
+    return " ".join(ligne.split())[:140]
+
+
+def _motif_refus_mp4_complet(path: Path) -> str:
+    """Pourquoi ce téléchargement est refusé ; chaîne vide s'il est valide.
+
+    Source unique de la décision : ``valid_mp4_complet`` n'en garde que le
+    booléen, ``raison_refus_mp4`` rend le texte. Les motifs sont des mots-clés
+    stables plus, quand la sonde s'est exprimée, sa première ligne utile."""
     if not valid_mp4(path):
-        return False
+        return "structure=boite MP4 absente, tronquee ou pas une video"
     outil = _outil_validation_media()
     if outil is None:
-        return False
+        return "outil=aucun ffprobe ni ffmpeg disponible"
     genre, executable = outil
     if genre == "ffprobe":
         commande = [
@@ -477,19 +486,49 @@ def valid_mp4_complet(path: Path) -> bool:
             stderr=subprocess.PIPE, text=True, encoding="utf-8",
             errors="replace", check=False, timeout=120,
         )
-    except (OSError, subprocess.SubprocessError):
-        return False
+    except (OSError, subprocess.SubprocessError) as erreur:
+        return f"outil={genre} lancement={type(erreur).__name__}"
+    lignes = _erreurs_ffprobe(resultat.stderr) if genre == "ffprobe" else [
+        ligne.strip() for ligne in (resultat.stderr or "").splitlines() if ligne.strip()]
+    premiere = _ligne_sans_donnee_privee(lignes[0], path) if lignes else ""
     if resultat.returncode != 0:
-        return False
+        return (f"outil={genre} code={resultat.returncode}"
+                + (f" ligne={premiere}" if premiere else ""))
     if genre == "ffprobe":
-        if _erreurs_ffprobe(resultat.stderr):
-            return False
+        if lignes:
+            return f"outil={genre} ligne={premiere}"
         nombres = [ligne.strip() for ligne in (resultat.stdout or "").splitlines()]
         try:
-            return any(int(nombre) > 0 for nombre in nombres if nombre)
+            if not any(int(nombre) > 0 for nombre in nombres if nombre):
+                return f"outil={genre} paquets-video=0"
         except ValueError:
-            return False
-    return True
+            return f"outil={genre} sortie=illisible"
+    return ""
+
+
+def valid_mp4_complet(path: Path) -> bool:
+    """Vérifie un téléchargement entier avant de le publier ou le supprimer.
+
+    La vérification structurelle élimine les réponses HTML et les fichiers
+    tronqués au niveau d'une boîte. Une sonde parcourt ensuite tous les paquets
+    vidéo : elle détecte notamment un ``mdat`` écourté malgré un ``ftyp`` et un
+    ``moov`` encore lisibles. Faute de sonde, on échoue fermé afin qu'aucune
+    source distante ne soit supprimée sur la foi d'un contrôle incomplet.
+    Toute ligne d'erreur de ffprobe fait refuser le fichier, sauf le bruit
+    connu des clips intacts (_BRUITS_FFPROBE).
+    """
+    return not _motif_refus_mp4_complet(path)
+
+
+def raison_refus_mp4(path: Path) -> str:
+    """La raison du refus de ``valid_mp4_complet`` pour ce fichier, sans chemin
+    ni nom de clip, prête à être imprimée. Ne lève jamais : un diagnostic ne
+    doit pas transformer un échec en plantage. Relance le contrôle, donc à ne
+    demander qu'après un refus."""
+    try:
+        return _motif_refus_mp4_complet(path) or "aucune (le fichier est valide)"
+    except Exception as erreur:
+        return f"diagnostic impossible ({type(erreur).__name__})"
 
 
 # Un verrou par fichier pour les lecteurs ET les écrivains d'un même processus

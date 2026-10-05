@@ -178,6 +178,7 @@ LIBELLES = {
         "cloud_indisponible": "  Cloud indisponible : {type}: {erreur}",
         "usb_echec": "    Échec de l’acquisition (exception : {type}).",
         "usb_echec_etape": "    Échec de l’acquisition : étape={etape}, statut HTTP={statut}.",
+        "usb_echec_raison": "    Raison du refus de la validation : {raison}.",
         "sync_suppression_impossible":
             "    ! Suppression impossible sur le Sync Module ({type}) ; "
             "clip conservé là-bas.",
@@ -218,6 +219,7 @@ LIBELLES = {
         "cloud_indisponible": "  Cloud unavailable: {type}: {erreur}",
         "usb_echec": "    Acquisition failed (exception: {type}).",
         "usb_echec_etape": "    Acquisition failed: stage={etape}, HTTP status={statut}.",
+        "usb_echec_raison": "    Why validation refused the file: {raison}.",
         "sync_suppression_impossible":
             "    ! Could not delete from the Sync Module ({type}); "
             "clip kept there.",
@@ -367,6 +369,19 @@ def _signaler_echec_acquisition(etape: str, erreur=None) -> None:
         pass
 
 
+def _signaler_raison_validation(chemin: Path) -> None:
+    """Dit POURQUOI la validation d'un clip a échoué (issue #49).
+
+    Sans cela, « étape=validation » ne distingue pas un fichier tronqué d'une
+    sonde absente ou d'une ligne que ffprobe refuse. La raison est nettoyée de
+    tout chemin et nom de clip (voir merge_daily.raison_refus_mp4) : ce
+    journal finit collé dans des issues publiques."""
+    try:
+        print(msg("usb_echec_raison", raison=md.raison_refus_mp4(chemin)), flush=True)
+    except Exception:
+        pass
+
+
 async def download_clip(blink: Blink, clip, target: Path, overwrite: bool) -> str:
     """Prépare puis télécharge un clip, sans jamais le supprimer du hub.
 
@@ -403,6 +418,8 @@ async def download_clip(blink: Blink, clip, target: Path, overwrite: bool) -> st
         # ftyp/moov intact ne suffit pas si mdat a été écourté en transit.
         if not partial.exists() or not md.valid_mp4_complet(partial):
             _signaler_echec_acquisition(etape)
+            if partial.exists():
+                _signaler_raison_validation(partial)
             return "failed"
         etape = "local"
         partial.replace(target)
