@@ -1432,6 +1432,42 @@ def _erreur_boucle_asyncio(loop, contexte: dict) -> None:
     _journal_direct("asyncio", f"exception non rattrapée sur BLINK.loop, {detail}")
 
 
+# Attente de la confirmation de Blink apres un armement de camera (voir
+# _confirmer_armement_camera) ; BLINK.call() borne l'ensemble a 60 s.
+DELAI_CONFIRMATION_ARMEMENT = 45
+
+
+async def _confirmer_armement_camera(blink, camera, reponse, armed: bool) -> None:
+    """Attend que Blink ait appliqué l'armement d'une caméra, puis le retient.
+
+    blinkpy poste la commande (camera.async_arm) et rend sa réponse sans la
+    suivre, et ne met pas à jour camera.motion_enabled, l'attribut que
+    describe_camera() affiche : depuis l'allègement de system_state() (le
+    2026-09-03, il ne relit plus que l'écran d'accueil et l'armement du hub),
+    cet attribut gardait sa valeur de la connexion. Armer une caméra depuis la
+    page laissait donc son bouton rouge, alors que celui du hub, relu à chaque
+    fois, passait au vert (constaté en réel le 2026-10-05, caméra « Salon »), et
+    le webhook d'état annonçait un armement périmé.
+
+    On suit donc la commande, comme reveiller_camera(), et on pose la valeur
+    confirmée. Un refus ou une absence de confirmation devient une erreur lisible
+    au lieu d'un échec silencieux."""
+    from blinkpy import api
+
+    if not isinstance(reponse, dict) or not reponse.get("id"):
+        raise RuntimeError("Blink a refusé la commande d'armement de la caméra.")
+    commande = dict(reponse)
+    commande.setdefault("network_id", camera.network_id)
+    try:
+        confirme = await asyncio.wait_for(
+            api.wait_for_command(blink, commande), DELAI_CONFIRMATION_ARMEMENT)
+    except asyncio.TimeoutError:
+        confirme = False
+    if not confirme:
+        raise RuntimeError("Blink n'a pas confirmé l'armement de la caméra.")
+    camera.motion_enabled = bool(armed)
+
+
 class BlinkSession:
     """Session Blink partagée, vivant sur sa propre boucle asyncio.
 
@@ -2554,7 +2590,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     await sync.async_arm(armed)
                     return
                 _, camera = BLINK.find_camera(_blink, identity)
-                await camera.async_arm(armed)
+                reponse = await camera.async_arm(armed)
+                await _confirmer_armement_camera(_blink, camera, reponse, armed)
             return run()
 
         BLINK.call(apply, timeout=60)
