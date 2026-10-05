@@ -755,6 +755,12 @@ l'utilisateur - et le lot d'optimisations, non urgentes.
   clips (acceptes) et sur des copies tronquees (refusees). Un clip
   synthetique seulement si le vrai clip ne peut pas etre publie. Les 104 clips reels de Nico restent dans la VM de test pour
   comparer, jamais dans le depot (images privees, depot public).
+  FAIT le 2026-10-05 : un vrai clip USB neutre de Nico (bureau, 21,5 s, 1,6 Mo,
+  audio = bruit de micro seulement) est dans fixtures/ avec son empreinte, et
+  test_validation_clip_usb_reel.py le passe a la vraie validation. Verifie dans
+  une VM avec le vrai ffprobe : 5 tests verts, et 2 echouent des qu'on retire le
+  filtre du bruit (l'ancien comportement). Le job Linux de la CI le joue avec
+  l'ffprobe d'apt.
 
 - **Icone de zone de notification sous GNOME Wayland : menu absent (voie
   StatusNotifierItem).**
