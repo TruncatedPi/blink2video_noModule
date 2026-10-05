@@ -211,9 +211,16 @@ class TestDoorbellEvents(unittest.TestCase):
             "reglages.doorbellChimeEnabled",
             "reglages.doorbellAutoRecord",
             "reglages.doorbellAutoRecordSeconds",
+            "events.viewRecordings",
         ]
         for key in required_i18n_keys:
             self.assertIn(f'"{key}":', app_js, f"Missing i18n key {key} in serve_app.js")
+
+    def test_prolonger_fenetre_direct_suppresses_alerts(self) -> None:
+        """Verifies that _prolonger_fenetre_direct extends LIVE_VIEW_ACTIVE_UNTIL into the future."""
+        serve.LIVE_VIEW_ACTIVE_UNTIL = 0.0
+        serve._prolonger_fenetre_direct(45.0)
+        self.assertGreater(serve.LIVE_VIEW_ACTIVE_UNTIL, time.time() + 40.0)
 
     def test_post_arm_suppresses_doorbell_alerts(self) -> None:
         """Verifies that calling set_armed arms DOORBELL_CONFIG_UPDATE_UNTIL to suppress false alerts."""

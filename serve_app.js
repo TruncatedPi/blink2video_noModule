@@ -270,6 +270,7 @@ const I18N = {
     "events.unack": "Nouveau",
     "events.viewHistory": "📋 Historique",
     "events.unreadMany": "{n} non lus",
+    "events.viewRecordings": "📁 Enregistrements du direct",
   },
   en: {
     "view.live": "Live Views", "view.direct": "Live Recordings",
@@ -475,6 +476,7 @@ const I18N = {
     "events.unack": "New",
     "events.viewHistory": "📋 History",
     "events.unreadMany": "{n} unread",
+    "events.viewRecordings": "📁 Live Recordings",
   },
 };
 let _lang = "fr";
@@ -3735,7 +3737,9 @@ async function ouvrirDirectCamera(nomCamera) {
     render();
   }
   if (!system || !system.systems) {
-    await loadSystem(false);
+    await loadSystem(true);
+  } else {
+    renderLive();
   }
   const cle = await trouverCleCamera(nomCamera);
   if (!cle) return null;
@@ -3893,6 +3897,7 @@ async function renderEvents() {
           <div style="display:flex; align-items:center; gap:8px;">
             <button type="button" class="act in" data-action="event-record" data-camera="${h(evt.camera)}" data-id="${h(evt.id)}">${t("doorbell.recordLive")}</button>
             <button type="button" class="act" data-action="event-watch" data-camera="${h(evt.camera)}" data-id="${h(evt.id)}">${t("doorbell.watchLive")}</button>
+            <button type="button" class="act" data-action="event-view-recordings" data-camera="${h(evt.camera)}" title="${h(t("events.viewRecordings"))}">${t("events.viewRecordings")}</button>
             ${isUnack ? `<button type="button" class="act out" data-action="event-ack" data-id="${h(evt.id)}">✓</button>` : ""}
           </div>
         </div>`;
@@ -3901,13 +3906,20 @@ async function renderEvents() {
     $("list").innerHTML = `
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; flex-wrap:wrap; gap:10px;">
         <h2 style="margin:0;">${t("events.title")}</h2>
-        <div style="display:flex; gap:8px;">
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button type="button" id="btnEventsViewRecordings" class="act in">${t("events.viewRecordings")}</button>
           <button type="button" id="btnEventsAckAll" class="act in">${t("events.ackAll")}</button>
           <button type="button" id="btnEventsClear" class="act out">${t("events.clear")}</button>
           <button type="button" id="btnEventsTest" class="act">${t("doorbell.test")}</button>
         </div>
       </div>
       <div class="eventsList">${rows}</div>`;
+
+    $("btnEventsViewRecordings")?.addEventListener("click", () => {
+      $("view").value = "direct";
+      pageClips = 0;
+      render();
+    });
 
     $("btnEventsAckAll")?.addEventListener("click", async () => {
       await fetch("/api/events/ack", {
@@ -3940,6 +3952,17 @@ async function renderEvents() {
           body: JSON.stringify({ event_id: btn.dataset.id })
         });
         renderEvents();
+      };
+    });
+
+    $("list").querySelectorAll('[data-action="event-view-recordings"]').forEach(btn => {
+      btn.onclick = () => {
+        $("view").value = "direct";
+        if (btn.dataset.camera && $("camera")) {
+          $("camera").value = btn.dataset.camera;
+        }
+        pageClips = 0;
+        render();
       };
     });
 

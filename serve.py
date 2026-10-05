@@ -299,6 +299,13 @@ DOORBELL_MONITOR_STOP = threading.Event()
 DOORBELL_MONITOR_THREAD: threading.Thread | None = None
 DOORBELL_MAX_EVENTS = 100
 ENREGISTREMENT_DIRECT_ARME_JUSQU_A: float = 0.0
+LIVE_VIEW_ACTIVE_UNTIL: float = 0.0
+
+
+def _prolonger_fenetre_direct(secondes: float) -> None:
+    """Prolonge la fenêtre d'inhibition des alertes sonnette dues au direct/réveil."""
+    global LIVE_VIEW_ACTIVE_UNTIL
+    LIVE_VIEW_ACTIVE_UNTIL = max(LIVE_VIEW_ACTIVE_UNTIL, time.time() + secondes)
 
 
 async def _poll_doorbells_async(blink_instance) -> list[dict]:
@@ -348,6 +355,9 @@ def _doorbell_monitor_loop() -> None:
                                 DOORBELL_LAST_SEEN_TIMESTAMPS[cid] = updated_at
                                 # Ignore timestamp updates caused by user/admin setting changes
                                 if time.time() < DOORBELL_CONFIG_UPDATE_UNTIL:
+                                    continue
+                                # Ignore timestamp updates caused by live view wake-up or active streaming
+                                if time.time() < LIVE_VIEW_ACTIVE_UNTIL or MODULE_SLOT_INFO.get("quoi") in ("direct WebRTC", "direct MSE"):
                                     continue
                                 # Enforce cooldown to prevent duplicate rapid triggers
                                 last_time = DOORBELL_LAST_EVENT_TIMES.get(cid, 0.0)
@@ -2659,6 +2669,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if not MODULE_SLOT.acquire(blocking=False):
             raise blink_engine.BusyError(_slot_occupe_message())
+        _prolonger_fenetre_direct(90.0)
         try:
             _slot_pris("reveil", identity)
             # Le verrou memoire protege les directs de ce serveur ; celui
@@ -2730,6 +2741,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if not MODULE_SLOT.acquire(blocking=False):
             raise blink_engine.BusyError(_slot_occupe_message())
+        _prolonger_fenetre_direct(90.0)
         try:
             _slot_pris("snapshot", identity)
             with blink_engine.hub_lock("snapshot", attente=ATTENTE_HUB_MAX_SECONDS):
@@ -2974,6 +2986,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         _slot_rendu()
                     finally:
                         MODULE_SLOT.release()
+                        _prolonger_fenetre_direct(45.0)
 
         async def _nettoyer() -> None:
             try:
@@ -3028,6 +3041,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             _slot_pris("direct WebRTC", name)
             journal("direct WebRTC commence")
+            _prolonger_fenetre_direct(60.0)
             if time.time() > ENREGISTREMENT_DIRECT_ARME_JUSQU_A and not runtime.lire_reglages().get("doorbell_auto_record"):
                 ENREGISTREMENT_DIRECT_ACTIF.clear()
             else:
@@ -3180,6 +3194,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         journaux_nettoyage: list = []
         try:
             _slot_pris("direct MSE", name)
+            _prolonger_fenetre_direct(60.0)
             if time.time() > ENREGISTREMENT_DIRECT_ARME_JUSQU_A and not runtime.lire_reglages().get("doorbell_auto_record"):
                 ENREGISTREMENT_DIRECT_ACTIF.clear()
             else:
@@ -3516,6 +3531,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 _slot_rendu()
             finally:
                 MODULE_SLOT.release()
+                _prolonger_fenetre_direct(45.0)
 
             # Diagnostic seulement après avoir rendu toutes les ressources :
             # sa lecture attend un fil et manipulait auparavant bytes comme str,
