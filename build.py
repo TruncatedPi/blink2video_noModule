@@ -17,6 +17,7 @@ et roue blinkpy 0.25.9 dont seules les métadonnées sont rétroportées.
 from __future__ import annotations  # Python 3.8 (build Windows 7) : les annotations "X | None" ne s'évaluent qu'à l'écriture des chaînes, jamais à l'exécution.
 
 import argparse
+import hashlib
 import inspect
 import os
 import shutil
@@ -46,10 +47,39 @@ WIN7_REQUIREMENTS = BASE_DIR / "requirements-win7.txt"
 # Compilation complète de secours, quand celle fournie par imageio-ffmpeg ne
 # sait pas incruster de texte. C'est le cas sous Linux, où elle est produite
 # sans libfreetype. Variante « gpl » : c'est celle qui embarque libfreetype.
+#
+# Version et empreinte FIGÉES (issue #49) : l'ancienne adresse « latest »
+# changeait à chaque nuit, donc deux releases Linux construites à un jour
+# d'écart pouvaient embarquer deux FFmpeg différents, sans qu'une ligne de code
+# ait bougé, et un exécutable téléchargé à la construction était livré sans
+# vérification. On vise la branche stable 8.1 (pas la branche de développement)
+# d'une construction datée, dont BtbN publie la somme dans checksums.sha256 ;
+# l'empreinte ci-dessous a été recalculée à la main sur l'archive téléchargée.
+# Pour changer de version : prendre une autre release « autobuild-AAAA-MM-JJ-… »
+# de https://github.com/BtbN/FFmpeg-Builds/releases, recopier le nom de
+# l'archive 8.1 et sa ligne de checksums.sha256, puis rejouer la validation des
+# clips USB (valid_mp4_complet) sur de vrais clips avant de publier.
+FFMPEG_SECOURS_TAG = "autobuild-2026-09-30-13-08"
+FFMPEG_SECOURS_ARCHIVE = "ffmpeg-n8.1.3-9-g29e619e767-linux64-gpl-8.1.tar.xz"
+FFMPEG_SECOURS_SHA256 = "97ce978979194b5cf7e06a5e68020dbdaa7a4f3294c5452b6a1bc347100dbb79"
 FFMPEG_SECOURS = (
-    "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
-    "ffmpeg-master-latest-linux64-gpl.tar.xz"
+    "https://github.com/BtbN/FFmpeg-Builds/releases/download/"
+    f"{FFMPEG_SECOURS_TAG}/{FFMPEG_SECOURS_ARCHIVE}"
 )
+
+
+def empreinte_sha256(chemin: Path) -> str:
+    """SHA-256 d'un fichier, lu par blocs : l'archive pèse environ 150 Mo."""
+    somme = hashlib.sha256()
+    with open(chemin, "rb") as fichier:
+        for bloc in iter(lambda: fichier.read(1 << 20), b""):
+            somme.update(bloc)
+    return somme.hexdigest()
+
+
+def verifier_empreinte(chemin: Path, attendue: str) -> bool:
+    """Vrai si le fichier a bien l'empreinte attendue (casse indifférente)."""
+    return empreinte_sha256(chemin) == attendue.strip().lower()
 
 
 def _chemins(win7: bool) -> tuple:
@@ -165,8 +195,21 @@ def ffmpeg_utilisable(python: Path, travail: Path) -> tuple[str, str | None]:
 
     archive = travail / "ffmpeg-linux.tar.xz"
     archive.parent.mkdir(parents=True, exist_ok=True)
+    # Une archive déjà présente (cache de travail) est revérifiée : une copie
+    # d'une autre version, ou tronquée, ne doit jamais être réutilisée.
+    if archive.exists() and not verifier_empreinte(archive, FFMPEG_SECOURS_SHA256):
+        archive.unlink()
     if not archive.exists():
         urllib.request.urlretrieve(FFMPEG_SECOURS, archive)
+        if not verifier_empreinte(archive, FFMPEG_SECOURS_SHA256):
+            obtenue = empreinte_sha256(archive)
+            archive.unlink()
+            raise SystemExit(
+                "L'archive FFmpeg téléchargée n'a pas l'empreinte attendue "
+                f"(attendue {FFMPEG_SECOURS_SHA256}, obtenue {obtenue}) : "
+                f"{FFMPEG_SECOURS}. Construction arrêtée plutôt que d'embarquer "
+                "un exécutable non vérifié."
+            )
     with tarfile.open(archive) as fichier:
         membres = fichier.getmembers()
         membre = next(m for m in membres if m.name.endswith("/bin/ffmpeg"))
