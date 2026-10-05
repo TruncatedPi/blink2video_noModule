@@ -90,6 +90,12 @@ LIBELLES = {
             "Réessayez dans un instant.",
         "webhook_camera_manquante": "Paramètre « camera » manquant.",
         "webhook_jeton_invalide": "Jeton de webhook invalide ou manquant.",
+        "webhook_camera_inconnue": "Caméra inconnue : {camera}.",
+        "webhook_systeme_inconnu": "Système inconnu : {systeme}.",
+        "webhook_nom_ambigu": "Plusieurs éléments portent ce nom : {nom}. Renommez-en un dans l'application Blink.",
+        "webhook_cible": "Indiquez exactement une cible : camera ou system.",
+        "webhook_armed_invalide": "Paramètre armed attendu : true ou false.",
+        "webhook_camera_hors_ligne": "La caméra « {camera} » est hors ligne : armement non tenté.",
     },
     "en": {
         "aide_desc": "Local interface to watch Blink clips, discard some and bring them back.",
@@ -127,6 +133,12 @@ LIBELLES = {
             "Try again in a moment.",
         "webhook_camera_manquante": "Missing «camera» parameter.",
         "webhook_jeton_invalide": "Invalid or missing webhook token.",
+        "webhook_camera_inconnue": "Unknown camera: {camera}.",
+        "webhook_systeme_inconnu": "Unknown system: {systeme}.",
+        "webhook_nom_ambigu": "Several items have this name: {nom}. Rename one of them in the Blink app.",
+        "webhook_cible": "Give exactly one target: camera or system.",
+        "webhook_armed_invalide": "Parameter armed must be true or false.",
+        "webhook_camera_hors_ligne": "Camera \u201c{camera}\u201d is offline: arming not attempted.",
     },
 }
 
@@ -370,6 +382,72 @@ DOSSIER_DIRECT = runtime.dossier_sorties() / "Blink_Direct"
 # aucun, mais peut quand même répondre à une prise de vue explicite.
 DOSSIER_SNAPSHOTS = runtime.dossier_sorties() / "Blink_Snapshots"
 WEBHOOK_SNAPSHOT_ROUTE = "/webhook/snapshot"
+# Etat des cameras et armement pour les scripts (issue #40), meme secret que la
+# photo : un seul a retenir, decision de Nico et de Markus le 2026-09-30.
+WEBHOOK_STATUS_ROUTE = "/webhook/status"
+WEBHOOK_ARM_ROUTE = "/webhook/arm"
+# Un POST sur /webhook/arm n'a pas de corps utile (tout passe par l'URL) : on
+# le lit pour ne pas desynchroniser une connexion persistante, jusqu'a cette
+# taille, au-dela on ferme la connexion.
+_CORPS_WEBHOOK_MAX = 65536
+
+
+def _booleen_webhook(valeur):
+    """true/false, 1/0, on/off, yes/no, oui/non (casse indifferente), None sinon."""
+    v = (valeur or "").strip().casefold()
+    if v in ("true", "1", "on", "yes", "oui"):
+        return True
+    if v in ("false", "0", "off", "no", "non"):
+        return False
+    return None
+
+
+def _camera_pour_webhook(camera: dict, systeme) -> dict:
+    """Ce qu'un script voit d'une camera : les champs que Blink donne, tels
+    quels, et null quand une camera ne les rapporte pas (tous les modeles n'ont
+    ni batterie ni tension ni wifi). Pas de numero de serie."""
+    return {
+        "name": camera.get("name"),
+        "system": systeme,
+        "armed": camera.get("armed"),
+        "online": not camera.get("offline"),
+        "status": camera.get("status") or None,
+        "battery": camera.get("battery"),
+        "battery_signal": camera.get("battery_signal"),
+        "voltage": camera.get("voltage"),
+        "temperature_c": camera.get("temperature"),
+        "wifi": camera.get("wifi"),
+        "firmware": camera.get("firmware"),
+        "model": camera.get("model"),
+        "age_seconds": camera.get("age_seconds"),
+    }
+
+
+def etat_webhook(etat: dict, camera: str = ""):
+    """Etat des systemes et des cameras pour /webhook/status, depuis le meme
+    system_state() que la page. Avec `camera`, seulement celle-la ; None si ce
+    nom ne correspond a aucune camera."""
+    systemes = []
+    trouvee = False
+    for systeme in etat.get("systems") or []:
+        cameras = [
+            _camera_pour_webhook(c, systeme.get("name"))
+            for c in systeme.get("cameras") or []
+            if not camera or str(c.get("name") or "").strip() == camera
+        ]
+        if camera and not cameras:
+            continue
+        trouvee = trouvee or bool(cameras)
+        systemes.append({
+            "name": systeme.get("name"),
+            "armed": systeme.get("armed"),
+            "module": systeme.get("module"),
+            "firmware": systeme.get("module_firmware"),
+            "cameras": cameras,
+        })
+    if camera and not trouvee:
+        return None
+    return {"systems": systemes}
 
 
 def _chemin_enregistrement_direct(name: str) -> Path:
@@ -2667,6 +2745,128 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except Exception as erreur:
             self.send_json({"error": f"{type(erreur).__name__}: {erreur}"}, 503)
 
+    def _secret_webhook_valide(self, requete: dict) -> bool:
+        """Meme secret que le webhook de photo, compare en temps constant (en
+        octets : un jeton non ASCII ne doit pas lever TypeError)."""
+        fourni = (requete.get("token") or [""])[0].encode("utf-8")
+        attendu = runtime.lire_jeton_webhook().encode("utf-8")
+        return bool(attendu) and hmac.compare_digest(fourni, attendu)
+
+    def _etat_pour_webhook(self):
+        """system_state() ou (None, message) : jamais une exception."""
+        try:
+            etat = self.system_state()
+        except Exception as erreur:
+            return None, f"{type(erreur).__name__}: {erreur}"
+        if isinstance(etat, dict) and etat.get("error"):
+            return None, str(etat["error"])
+        return etat, ""
+
+    def gerer_webhook_status(self) -> None:
+        """Etat des cameras en JSON pour un script (issue #40) : en ligne,
+        armee, batterie, temperature, wifi, firmware, modele. Meme authentification
+        que gerer_webhook_snapshot(), avant les gardes-fous du navigateur."""
+        requete = parse_qs(urlparse(self.path).query)
+        if not self._secret_webhook_valide(requete):
+            self.send_error(403)
+            return
+        camera = (requete.get("camera") or [""])[0].strip()
+        etat, erreur = self._etat_pour_webhook()
+        if etat is None:
+            self.send_json({"error": erreur}, 503)
+            return
+        reponse = etat_webhook(etat, camera)
+        if reponse is None:
+            self.send_json({"error": msg("webhook_camera_inconnue", camera=camera)}, 404)
+            return
+        self.send_json(reponse)
+
+    def gerer_webhook_arm(self) -> None:
+        """Arme ou desarme une camera ou un systeme depuis un script (issue
+        #40) : /webhook/arm?camera=<nom>|system=<nom>&armed=true|false&token=...
+
+        Une camera hors ligne n'est pas tentee : la reponse rend son etat et une
+        erreur nette plutot que d'attendre le delai d'une commande qui ne
+        reviendra pas. Chaque changement est journalise (armement-webhook.log)
+        avec l'adresse de l'appelant : desarmer des cameras a distance est plus
+        sensible qu'une photo."""
+        if self.command == "POST":
+            try:
+                longueur = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                longueur = 0
+            if longueur > _CORPS_WEBHOOK_MAX:
+                self.close_connection = True
+            elif longueur > 0:
+                self.rfile.read(longueur)
+        requete = parse_qs(urlparse(self.path).query)
+        if not self._secret_webhook_valide(requete):
+            self.send_error(403)
+            return
+        camera = (requete.get("camera") or [""])[0].strip()
+        systeme = (requete.get("system") or [""])[0].strip()
+        if bool(camera) == bool(systeme):
+            self.send_json({"error": msg("webhook_cible")}, 400)
+            return
+        voulu = _booleen_webhook((requete.get("armed") or [""])[0])
+        if voulu is None:
+            self.send_json({"error": msg("webhook_armed_invalide")}, 400)
+            return
+        etat, erreur = self._etat_pour_webhook()
+        if etat is None:
+            self.send_json({"error": erreur}, 503)
+            return
+        if camera:
+            portee, nom = "camera", camera
+            candidats = [(s, c) for s in etat.get("systems") or [] for c in s.get("cameras") or []
+                         if str(c.get("name") or "").strip() == camera]
+        else:
+            portee, nom = "system", systeme
+            candidats = [(s, None) for s in etat.get("systems") or []
+                         if str(s.get("name") or "").strip() == systeme]
+        if not candidats:
+            cle = "webhook_camera_inconnue" if camera else "webhook_systeme_inconnu"
+            self.send_json({"error": msg(cle, camera=nom, systeme=nom)}, 404)
+            return
+        if len(candidats) > 1:
+            self.send_json({"error": msg("webhook_nom_ambigu", nom=nom)}, 409)
+            return
+        systeme_trouve, camera_trouvee = candidats[0]
+        if camera_trouvee is not None and camera_trouvee.get("offline"):
+            self.send_json({
+                "error": msg("webhook_camera_hors_ligne", camera=nom),
+                "camera": _camera_pour_webhook(camera_trouvee, systeme_trouve.get("name")),
+            }, 409)
+            return
+        identite = (camera_trouvee or systeme_trouve)["key"]
+        try:
+            self.set_armed(portee, identite, voulu)
+        except RuntimeError as erreur_blink:
+            self.send_json({"error": str(erreur_blink)}, 503)
+            return
+        except Exception as erreur_blink:
+            self.send_json({"error": f"{type(erreur_blink).__name__}: {erreur_blink}"}, 503)
+            return
+        horodatage = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        client = self.client_address[0] if getattr(self, "client_address", None) else "?"
+        runtime.ajouter_ligne(
+            "armement-webhook.log",
+            f"{horodatage} {portee} \u00ab {nom} \u00bb armed={str(voulu).lower()} depuis {client}")
+        apres, erreur = self._etat_pour_webhook()
+        reponse = {"ok": True, "scope": portee, "requested": voulu}
+        if apres is not None:
+            lu = etat_webhook(apres, camera) if camera else None
+            if camera and lu:
+                reponse["camera"] = lu["systems"][0]["cameras"][0]
+                reponse["applied"] = reponse["camera"]["armed"] == voulu
+            elif not camera:
+                courant = next((s for s in apres.get("systems") or []
+                                if str(s.get("name") or "").strip() == systeme), None)
+                if courant is not None:
+                    reponse["system"] = {"name": courant.get("name"), "armed": courant.get("armed")}
+                    reponse["applied"] = courant.get("armed") == voulu
+        self.send_json(reponse)
+
     def send_camera_thumb(self, identity: str, refresh: bool = False) -> None:
         """Sert la dernière vignette connue d'une caméra.
 
@@ -3443,6 +3643,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # GitHub #9). gerer_webhook_snapshot() a son propre secret,
             # indépendant, jamais examiné par ces deux fonctions.
             self.gerer_webhook_snapshot()
+            return
+        if route == WEBHOOK_STATUS_ROUTE:
+            self.gerer_webhook_status()
+            return
+        if route == WEBHOOK_ARM_ROUTE:
+            self.gerer_webhook_arm()
             return
         if not self.hote_autorise():
             self.send_error(403)
@@ -4283,6 +4489,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_error(code)
 
     def do_POST(self):
+        # Meme raison que do_GET : un appelant externe (script de domotique)
+        # n'a ni l'origine ni le jeton de session, le secret du webhook suffit.
+        try:
+            route_webhook = urlparse(self.path).path
+        except ValueError:
+            route_webhook = ""
+        if route_webhook == WEBHOOK_ARM_ROUTE:
+            self.gerer_webhook_arm()
+            return
         if not self.hote_autorise() or not self.jeton_valide():
             self._refuser(403)
             return
