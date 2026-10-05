@@ -4623,6 +4623,20 @@ __CSS__
       <input type="checkbox" id="auto"> <span data-i18n="reglages.auto">Actualisation automatique de la page</span>
     </label>
     <div class="champCadence">
+      <label for="tailleCartes" data-i18n="reglages.tailleCartes">Taille des vignettes</label>
+      <select id="tailleCartes">
+        <option value="petites" data-i18n="reglages.tailleCartes.petites">Petites</option>
+        <option value="moyennes" data-i18n="reglages.tailleCartes.moyennes">Moyennes</option>
+        <option value="grandes" data-i18n="reglages.tailleCartes.grandes">Grandes</option>
+        <option value="tres_grandes" data-i18n="reglages.tailleCartes.tres_grandes">Très grandes</option>
+      </select>
+    </div>
+    <fieldset>
+      <legend data-i18n="reglages.masquees">Caméras masquées</legend>
+      <p class="sub tiny" data-i18n="reglages.masquees.hint">Une caméra masquée disparaît des listes de cette page mais continue d'enregistrer et de télécharger. Réglage propre à ce navigateur.</p>
+      <div id="camerasMasqueesListe" class="ligneCoches sub tiny"></div>
+    </fieldset>
+    <div class="champCadence">
       <label for="port" data-i18n="reglages.serveur">Port du serveur</label>
       <input type="number" id="port" min="1" max="65535" step="1">
     </div>
@@ -4819,6 +4833,9 @@ __CSS__
   </div>
   <label id="outLabel">
     <input type="checkbox" id="showOut"> <span data-i18n="reglages.showOut">Voir les clips écartés</span>
+  </label>
+  <label id="hiddenLabel" hidden>
+    <input type="checkbox" id="showHidden"> <span data-i18n="filtre.showHidden">Afficher les caméras masquées</span>
   </label>
   <div id="periodeSection">
     <p class="sub tiny" data-i18n="range.title">Période</p>

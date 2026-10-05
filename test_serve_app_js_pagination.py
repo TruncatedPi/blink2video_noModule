@@ -59,6 +59,7 @@ let plageClips = {preset:'all'}, plageEnAttente = null;
 const paramsPourPlage = () => '';
 const fetch = async url => url.startsWith('/api/clips') ? structuredClone(data) : [];
 const lireJSON = async answer => answer;
+const estMasquee = () => false; const comparerNoms = (a, b) => String(a).localeCompare(String(b));
 const fill = () => {}, camerasConnues = () => [], sauvegarderFiltre = () => {};
 const majBoutonAppliquer = () => {}, chargerSnapshots = () => {};
 const render = () => renderClips();

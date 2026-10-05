@@ -37,6 +37,7 @@ const h = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({{
 const avecJeton = (url) => url;
 function t(cle) {{ return cle; }}
 function tf(cle, valeurs) {{ return cle; }}
+const estMasquee = () => false; const comparerNoms = (a, b) => String(a).localeCompare(String(b));
 
 const boxes = {{
   camera: {{ value: {camera_filtre!r} }},
@@ -67,6 +68,7 @@ const h = (value) => String(value ?? "");
 const avecJeton = (url) => url;
 function t(cle) {{ return cle; }}
 function tf(cle, valeurs) {{ return cle; }}
+const estMasquee = () => false; const comparerNoms = (a, b) => String(a).localeCompare(String(b));
 const boxes = {{ camera: {{ value: {camera_filtre!r} }}, groupBy: {{ value: "day" }} }};
 function $(id) {{ return boxes[id]; }}
 const videos = {{ daily: [] }};

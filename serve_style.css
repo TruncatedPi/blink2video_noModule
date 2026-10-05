@@ -38,9 +38,11 @@
   h2 { font-size:14px; color:var(--dim); font-weight:600; margin:28px 0 12px;
        border-bottom:1px solid var(--line); padding-bottom:7px; }
   h2:first-child { margin-top:0; }
+  /* --carte-min : taille des vignettes choisie dans les réglages (320 px par défaut) ;
+     les grilles larges gardent leur rapport historique de 460/320. */
   .grid { display:grid; gap:16px;
-          grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); }
-  .grid.wide { grid-template-columns:repeat(auto-fill, minmax(460px, 1fr)); }
+          grid-template-columns:repeat(auto-fill, minmax(var(--carte-min, 320px), 1fr)); }
+  .grid.wide { grid-template-columns:repeat(auto-fill, minmax(calc(var(--carte-min, 320px) * 1.4375), 1fr)); }
   a.act { text-decoration:none; border:1px solid var(--line); background:var(--bg);
           color:var(--dim); }
   a.act:hover { border-color:#4b5262; color:var(--text); }

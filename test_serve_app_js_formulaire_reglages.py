@@ -65,7 +65,7 @@ const ids = [
   'initialSetupHint', 'reglagesClose', 'stopButton', 'reglages', 'reglagesButton',
   'webhookUrl', 'webhookRegenerer', 'fontSize', 'fontColor', 'boxOpacity',
   'trustedHost', 'webhookNotifUrl', 'liveAutoStopSeconds', 'redemarrerButton',
-  'tabGeneral', 'tabVideo', 'tabAcces', 'tabAlertes',
+  'tabGeneral', 'tabVideo', 'tabAcces', 'tabAlertes', 'tailleCartes',
   'panelGeneral', 'panelVideo', 'panelAcces', 'panelAlertes',
 ];
 class Element {
@@ -112,6 +112,8 @@ globalThis.chargerSuppressionAuto = () => {
   evenements.push('chargerSuppressionAuto');
   return attenteListes;
 };
+globalThis.chargerCamerasMasquees = () => {};
+globalThis.tailleCartes = 'moyennes';
 globalThis.fetch = async (url, options) => {
   if (url !== '/api/reglages' || options !== undefined) {
     throw new Error(`Requête inattendue : ${url}`);

@@ -217,6 +217,14 @@ const I18N = {
     "clips.go.page": "Aller à la page", "clips.go": "Aller",
     "clips.per.page": "Clips par page", "clips.all": "Tous",
     "clips.page": "Page {page}/{pages} · {total} clips",
+    "filtre.showHidden": "Afficher les caméras masquées",
+    "reglages.tailleCartes": "Taille des vignettes",
+    "reglages.tailleCartes.petites": "Petites", "reglages.tailleCartes.moyennes": "Moyennes",
+    "reglages.tailleCartes.grandes": "Grandes", "reglages.tailleCartes.tres_grandes": "Très grandes",
+    "reglages.masquees": "Caméras masquées",
+    "reglages.masquees.hint": "Une caméra masquée disparaît des listes de cette page (clips, vidéos, photos, direct) mais continue d'enregistrer et de télécharger. Réglage propre à ce navigateur.",
+    "masquees.none": "Aucune caméra connue pour l'instant.",
+    "live.toutesMasquees": "Toutes les caméras de ce système sont masquées.",
     "range.title": "Période",
     "range.today": "Aujourd'hui (24 h)", "range.week": "Cette semaine (7 j)",
     "range.month": "Ce mois-ci", "range.2months": "2 derniers mois",
@@ -399,6 +407,14 @@ const I18N = {
     "clips.go.page": "Go to page", "clips.go": "Go",
     "clips.per.page": "Clips per page", "clips.all": "All",
     "clips.page": "Page {page}/{pages} · {total} clips",
+    "filtre.showHidden": "Show hidden cameras",
+    "reglages.tailleCartes": "Thumbnail size",
+    "reglages.tailleCartes.petites": "Small", "reglages.tailleCartes.moyennes": "Medium",
+    "reglages.tailleCartes.grandes": "Large", "reglages.tailleCartes.tres_grandes": "Extra large",
+    "reglages.masquees": "Hidden cameras",
+    "reglages.masquees.hint": "A hidden camera disappears from the lists on this page (clips, videos, pictures, live) but keeps recording and downloading. This setting is specific to this browser.",
+    "masquees.none": "No known camera yet.",
+    "live.toutesMasquees": "All cameras of this system are hidden.",
     "range.title": "Period",
     "range.today": "Today (24h)", "range.week": "This week (7d)",
     "range.month": "This month", "range.2months": "Last 2 months",
@@ -490,6 +506,7 @@ function setLang(code, persist) {
   // Reconstruire immédiatement plutôt que de laisser la liste figée ainsi
   // jusqu'à la prochaine ouverture du panneau.
   if (typeof chargerSourdine === "function" && $("reglages")?.open) chargerSourdine();
+  if (typeof chargerCamerasMasquees === "function" && $("reglages")?.open) chargerCamerasMasquees();
   if (typeof chargerSuppressionAuto === "function" && $("reglages")?.open) chargerSuppressionAuto();
   if (persist) localStorage.setItem("lang", _lang);
   // Envoyé à chaque appel, pas seulement un choix explicite (persist) :
@@ -502,6 +519,98 @@ function setLang(code, persist) {
     body: JSON.stringify({ lang: _lang }) }).catch(() => {});
 }
 
+// ── Préférences d'affichage propres à ce navigateur (issue #40) ───────────
+// Comme la taille de page et l'actualisation automatique : mémorisées dans
+// localStorage, donc propres à chaque appareil (un téléphone et un PC peuvent
+// vouloir des choses différentes), sans réglage serveur ni redémarrage. Masquer
+// une caméra ne la touche pas : elle continue d'enregistrer et de télécharger.
+const CLE_CAMERAS_MASQUEES = "blink2video.camerasMasquees";
+const CLE_TAILLE_CARTES = "blink2video.tailleCartes";
+const TAILLES_CARTES = { petites: 220, moyennes: 320, grandes: 480, tres_grandes: 720 };
+const TAILLE_CARTES_DEFAUT = "moyennes";
+let camerasMasquees = restaurerCamerasMasquees();
+// Dévoilement temporaire (case de la fenêtre de filtre) : jamais mémorisé, la
+// liste redevient masquée au prochain chargement.
+let montrerMasquees = false;
+let tailleCartes = restaurerTailleCartes();
+
+function restaurerCamerasMasquees() {
+  try {
+    const liste = JSON.parse(localStorage.getItem(CLE_CAMERAS_MASQUEES) || "[]");
+    if (Array.isArray(liste)) return new Set(liste.filter((nom) => typeof nom === "string"));
+  } catch (erreur) {}
+  return new Set();
+}
+
+function memoriserCamerasMasquees() {
+  try {
+    localStorage.setItem(CLE_CAMERAS_MASQUEES, JSON.stringify([...camerasMasquees].sort()));
+  } catch (erreur) {}
+}
+
+function estMasquee(nom) {
+  return camerasMasquees.has(nom) && !montrerMasquees;
+}
+
+function restaurerTailleCartes() {
+  try {
+    const nom = localStorage.getItem(CLE_TAILLE_CARTES);
+    if (Object.prototype.hasOwnProperty.call(TAILLES_CARTES, nom)) return nom;
+  } catch (erreur) {}
+  return TAILLE_CARTES_DEFAUT;
+}
+
+function appliquerTailleCartes() {
+  document.documentElement.style.setProperty("--carte-min", `${TAILLES_CARTES[tailleCartes]}px`);
+}
+appliquerTailleCartes();
+
+// Ordre naturel des noms de caméras (« 2-Escalier » avant « 10-Cave »), dans
+// la langue de la page. Un collateur par langue : en construire un par
+// comparaison coûterait cher sur une liste longue.
+const _collateurs = {};
+function comparerNoms(a, b) {
+  if (!_collateurs[_lang]) {
+    _collateurs[_lang] = new Intl.Collator(_lang, { numeric: true, sensitivity: "base" });
+  }
+  return _collateurs[_lang].compare(a, b);
+}
+
+function majCaseMasquees() {
+  $("hiddenLabel").hidden = camerasMasquees.size === 0;
+  if (!camerasMasquees.size) {
+    montrerMasquees = false;
+    $("showHidden").checked = false;
+  }
+}
+
+function chargerCamerasMasquees() {
+  const conteneur = $("camerasMasqueesListe");
+  const noms = camerasPourMasquage();
+  if (!noms.length) {
+    conteneur.textContent = t("masquees.none");
+    return;
+  }
+  conteneur.replaceChildren();
+  for (const nom of noms) {
+    const label = document.createElement("label");
+    const case_ = document.createElement("input");
+    case_.type = "checkbox";
+    case_.checked = camerasMasquees.has(nom);
+    case_.onchange = () => {
+      if (case_.checked) camerasMasquees.add(nom);
+      else camerasMasquees.delete(nom);
+      memoriserCamerasMasquees();
+      majCaseMasquees();
+      fill($("camera"), camerasConnues(), t("filter.allcameras"));
+      render();
+    };
+    label.appendChild(case_);
+    label.append(` ${nom}`);
+    conteneur.appendChild(label);
+  }
+}
+
 // data.cameras (issu de /api/clips) ne connaît qu'une caméra qui a au moins
 // un clip de détection téléchargé. Une caméra seulement vue en direct
 // (bouton Enregistrement Direct, jamais de clip) en était donc absente : ses
@@ -510,7 +619,7 @@ function setLang(code, persist) {
 // L'union avec les caméras réellement présentes dans chaque catégorie de
 // videos (daily/weekly/monthly/direct) couvre aussi bien ce cas que les
 // mêmes catégories pour la même raison, sans rien de spécifique à direct.
-function camerasConnues() {
+function toutesLesCameras() {
   const ensemble = new Set(data.cameras || []);
   for (const liste of Object.values(videos)) {
     for (const v of liste) ensemble.add(v.camera);
@@ -519,7 +628,23 @@ function camerasConnues() {
   // armée) doit quand même apparaître ici : sinon rien ne permet de filtrer
   // sur elle dans Photos.
   for (const s of snapshots) ensemble.add(s.camera);
-  return [...ensemble].sort();
+  return [...ensemble];
+}
+
+// Le filtre ne propose pas les caméras masquées (sauf dévoilement temporaire),
+// triées dans l'ordre naturel : « 2-Escalier » avant « 10-Cave ».
+function camerasConnues() {
+  return toutesLesCameras().filter((nom) => !estMasquee(nom)).sort(comparerNoms);
+}
+
+// Liste de la fenêtre des réglages : toutes les caméras, masquées ou non, y
+// compris celles vues seulement en direct et celles masquées puis disparues.
+function camerasPourMasquage() {
+  const ensemble = new Set([...toutesLesCameras(), ...camerasMasquees]);
+  for (const s of (system && system.systems) || []) {
+    for (const c of s.cameras) ensemble.add(c.name);
+  }
+  return [...ensemble].sort(comparerNoms);
 }
 
 // c.battery (cameraCard, plus bas) n'est renseigné que si Blink en publie
@@ -559,6 +684,7 @@ function visible() {
   return data.clips.filter((c) =>
     c.kind === kindAttendu &&
     (!$("camera").value || c.camera === $("camera").value) &&
+    !estMasquee(c.camera) &&
     ($("showOut").checked || !c.excluded));
 }
 
@@ -908,9 +1034,13 @@ function renderLive() {
     $("list").innerHTML = `<p class="empty">${h(system.error)}</p>`;
     return;
   }
-  const cameras = system.systems.reduce((n, s) => n + s.cameras.length, 0);
+  // Caméras masquées exclues, les autres dans l'ordre naturel de leur nom.
+  const camerasVisibles = (s) => s.cameras
+    .filter((c) => !estMasquee(c.name))
+    .sort((a, b) => comparerNoms(a.name, b.name));
+  const cameras = system.systems.reduce((n, s) => n + camerasVisibles(s).length, 0);
   const armed = system.systems.reduce(
-    (n, s) => n + s.cameras.filter((c) => c.armed).length, 0);
+    (n, s) => n + camerasVisibles(s).filter((c) => c.armed).length, 0);
   $("count").textContent = tf("live.count", { n: cameras, m: armed });
 
   $("list").innerHTML = system.systems.map((s) => `
@@ -925,7 +1055,9 @@ function renderLive() {
         ${h(s.armed ? t("system.armed") : t("system.disarmed"))}
       </button>
     </h2>
-    <div class="grid wide">${s.cameras.map((c) => cameraCard(c, s.armed)).join("")}</div>
+    ${camerasVisibles(s).length
+      ? `<div class="grid wide">${camerasVisibles(s).map((c) => cameraCard(c, s.armed)).join("")}</div>`
+      : `<p class="sub tiny">${h(t("live.toutesMasquees"))}</p>`}
   `).join("");
   if (rafraichirVignettes) actualiserVignettes();
   rafraichirVignettes = false;
@@ -2254,7 +2386,8 @@ function majGroupBy() {
 
 function renderVideos(kind) {
   const items = (videos[kind] || [])
-    .filter((v) => !$("camera").value || v.camera === $("camera").value);
+    .filter((v) => !$("camera").value || v.camera === $("camera").value)
+    .filter((v) => !estMasquee(v.camera));
   const total = items.reduce((sum, v) => sum + v.duration, 0);
   $("count").textContent = items.length
     ? tf("videos.count", { n: items.length, duree: duration(total) })
@@ -2274,7 +2407,7 @@ function renderVideos(kind) {
   const parJour = regroupable(kind) && $("groupBy").value === "day";
   const cles = parJour
     ? [...new Set(items.map((v) => v.label))].sort().reverse()
-    : [...new Set(items.map((v) => v.camera))];
+    : [...new Set(items.map((v) => v.camera))].sort(comparerNoms);
   const correspond = parJour
     ? (v, cle) => v.label === cle
     : (v, cle) => v.camera === cle;
@@ -2283,7 +2416,7 @@ function renderVideos(kind) {
     <h2>${h(titre(cle))}</h2>
     <div class="grid wide">
       ${items.filter((v) => correspond(v, cle))
-        .sort((a, b) => parJour ? a.camera.localeCompare(b.camera) : 0)
+        .sort((a, b) => parJour ? comparerNoms(a.camera, b.camera) : 0)
         .map((v) => videoCard(v, parJour)).join("")}
     </div>
   `).join("");
@@ -2307,13 +2440,14 @@ function dateLocale(jour) {
 }
 
 function renderPictures() {
-  const items = snapshots.filter((s) => !$("camera").value || s.camera === $("camera").value);
+  const items = snapshots.filter((s) => (!$("camera").value || s.camera === $("camera").value)
+    && !estMasquee(s.camera));
   $("count").textContent = items.length ? tf("pictures.count", { n: items.length }) : "";
   if (!items.length) {
     $("list").innerHTML = `<p class="empty">${t("pictures.none")}</p>`;
     return;
   }
-  const cameras = [...new Set(items.map((s) => s.camera))];
+  const cameras = [...new Set(items.map((s) => s.camera))].sort(comparerNoms);
   $("list").innerHTML = cameras.map((camera) => `
     <h2>${h(camera)}</h2>
     <div class="grid">
@@ -2892,6 +3026,18 @@ $("refresh").onclick = async () => {
 };
 
 $("showOut").onchange = () => { pageClips = 0; render(); };
+$("showHidden").onchange = () => {
+  montrerMasquees = $("showHidden").checked;
+  pageClips = 0;
+  fill($("camera"), camerasConnues(), t("filter.allcameras"));
+  render();
+};
+$("tailleCartes").onchange = () => {
+  tailleCartes = $("tailleCartes").value;
+  try { localStorage.setItem(CLE_TAILLE_CARTES, tailleCartes); } catch (erreur) {}
+  appliquerTailleCartes();
+};
+majCaseMasquees();
 // "view" a besoin de données fraîches, pas juste d'un nouveau rendu de ce qui
 // est déjà en mémoire : Clips, Clips Directs, Journalières, Hebdomadaires,
 // Mensuelles peuvent tous avoir changé pendant que l'onglet restait ouvert
@@ -3039,6 +3185,8 @@ async function ouvrirReglages(configurationInitiale = false) {
     afficherFormulaireReglages(reglages);
   } catch (erreur) { /* les champs gardent leur dernière valeur affichée */ }
   configurerDialogueReglages(configurationInitiale);
+  chargerCamerasMasquees();
+  $("tailleCartes").value = tailleCartes;
   chargerSourdine();
   chargerSuppressionAuto();
   $("reglages").showModal();
