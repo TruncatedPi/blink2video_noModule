@@ -811,3 +811,15 @@ l'utilisateur - et le lot d'optimisations, non urgentes.
   parti (serve._client_parti, controle apres l'attente du creneau). RESTE :
   fabriquer la vignette au telechargement du clip, et une borne sur la file ;
   le test a froid de Joel sur les vrais clips dira s'ils sont encore utiles.
+
+- **Sourdine d'un Sync Module dans watch.**
+  Source : Nico, 2026-10-05 (module du Portail eteint, fenetre « Module hors
+  ligne » a chaque tour ; la fenetre ne propose que --ignore pour une camera).
+  La boucle elle-meme venait de deux modules de meme nom (« My Blink Sync
+  Module ») retrouves par leur nom : corrigee en 0.16.3 (identifiant Blink).
+  Reste : pouvoir mettre un module en sourdine comme une camera. Piege : par
+  le nom, un --ignore couperait les deux modules homonymes ; il faut cibler
+  par identifiant (ou par reseau), et le dire dans le texte de la fenetre.
+  A decider avec la meme discipline que les cameras (une sourdine ne produit ni
+  alerte ni retour a la normale).
+
