@@ -45,6 +45,35 @@ class TestsIdentitesInstances(unittest.TestCase):
         self.assertEqual(donnees["identites"]["333"], "creation-333")
         self.assertEqual(os.environ[runtime.INSTANCE_PID_ENV], str(os.getpid()))
 
+    def test_serve_direct_est_inscrit_meme_avec_pid_herite_perime(self):
+        os.environ[runtime.INSTANCE_PID_ENV] = "111"
+        fiche = runtime.assurer_instance([["serve", "--port", "9000"]])
+        donnees = json.loads(fiche.read_text(encoding="utf-8"))
+        self.assertEqual(donnees["pid"], os.getpid())
+        self.assertEqual(donnees["verbes"], [["serve", "--port", "9000"]])
+        self.assertEqual(os.environ[runtime.INSTANCE_PID_ENV], str(os.getpid()))
+
+    def test_serve_enfant_conserve_la_fiche_et_les_travailleurs_du_parent(self):
+        pid = os.getpid()
+        fiche = self._ecrire_fiche()
+        donnees = json.loads(fiche.read_text(encoding="utf-8"))
+        donnees.update(enfants=[pid], travailleurs=[333], identites={
+            "111": "creation-111", str(pid): "creation-enfant", "333": "ffmpeg"})
+        fiche.write_text(json.dumps(donnees), encoding="utf-8")
+        with mock.patch.object(runtime, "identite_processus", side_effect=lambda p: {
+                111: "creation-111", pid: "creation-enfant", 333: "ffmpeg"}.get(p)), \
+             mock.patch.object(runtime, "inscrire_instance") as inscrire:
+            self.assertEqual(runtime.assurer_instance([["serve"]]), fiche)
+        inscrire.assert_not_called()
+        self.assertEqual(os.environ[runtime.INSTANCE_PID_ENV], "111")
+        self.assertEqual(json.loads(fiche.read_text())["travailleurs"], [333])
+
+    def test_serve_deja_inscrit_ne_double_pas_sa_fiche(self):
+        fiche = runtime.inscrire_instance([["serve"]])
+        with mock.patch.object(runtime, "inscrire_instance") as inscrire:
+            self.assertEqual(runtime.assurer_instance([["serve"]]), fiche)
+        inscrire.assert_not_called()
+
     def _ecrire_fiche(self, identite="creation-111") -> Path:
         dossier = self.controle / runtime.INSTANCES
         dossier.mkdir(exist_ok=True)
@@ -109,7 +138,7 @@ class TestArretReelIsole(unittest.TestCase):
     def test_stop_retrouve_et_termine_un_processus_cooperatif(self):
         """Exerce le vrai PID/temps de création, sans compte Blink ni popup."""
         with tempfile.TemporaryDirectory(prefix="blink-stop-reel-") as dossier:
-            environnement = dict(os.environ, BLINK_HOME=dossier)
+            environnement = dict(os.environ, BLINK_HOME=dossier, BLINK_CONTROL_HOME=dossier)
             code = (
                 "import time, runtime; "
                 "runtime.inscrire_instance([['watch', '--loop', '30']]); "
@@ -129,7 +158,7 @@ class TestArretReelIsole(unittest.TestCase):
                     time.sleep(0.05)
                 self.assertTrue(list(fiches.glob("*.json")))
 
-                with mock.patch.dict(os.environ, {"BLINK_HOME": dossier}, clear=False), \
+                with mock.patch.dict(os.environ, {"BLINK_HOME": dossier, "BLINK_CONTROL_HOME": dossier}, clear=False), \
                      contextlib.redirect_stdout(io.StringIO()):
                     resultat = blink_cli.arreter([])
                 self.assertEqual(resultat, 0)

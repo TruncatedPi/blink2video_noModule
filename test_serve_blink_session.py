@@ -10,6 +10,7 @@ import threading
 import time
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 
 
 os.environ["BLINK_BOOTSTRAP"] = "none"
@@ -20,6 +21,31 @@ import serve  # noqa: E402 - environnement isolé avant import
 
 
 class BlinkSessionTests(unittest.TestCase):
+    def test_connexion_absente_ou_refusee_ferme_session_http_avant_reessai(self):
+        for outcome in (None, RuntimeError("connexion refusée")):
+            with self.subTest(outcome=outcome):
+                session = serve.BlinkSession()
+                clients = [SimpleNamespace(close=mock.AsyncMock()),
+                           SimpleNamespace(close=mock.AsyncMock())]
+                with mock.patch.object(serve.blink_auth, "session_http", side_effect=clients), \
+                     mock.patch.object(serve.blink_auth, "connect_saved", new=mock.AsyncMock(
+                         side_effect=outcome if isinstance(outcome, Exception) else None,
+                         return_value=None)):
+                    try:
+                        for _ in range(2):
+                            with self.assertRaises(RuntimeError):
+                                session.call(mock.AsyncMock())
+                        for client in clients:
+                            client.close.assert_awaited_once()
+                        self.assertIsNone(session.session)
+                    finally:
+                        if session.loop:
+                            session.loop.call_soon_threadsafe(session.loop.stop)
+                            deadline = time.monotonic() + 2
+                            while session.loop.is_running() and time.monotonic() < deadline:
+                                time.sleep(0.001)
+                            session.loop.close()
+
     def test_timeout_annule_la_coroutine_avant_son_effet(self):
         session = serve.BlinkSession()
         session.blink = object()

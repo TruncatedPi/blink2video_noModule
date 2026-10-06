@@ -34,6 +34,7 @@ import os
 import queue
 import re
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -140,6 +141,7 @@ runtime.bootstrap()
 import autostart
 import blink_auth
 import blink_engine
+import blink_events
 import blink_models
 import blink_registre
 import blink_webrtc
@@ -274,8 +276,16 @@ def _charger_evenements_sonnette() -> list[dict]:
         cible = runtime.app_dir() / DOORBELL_EVENTS_FILE
         if cible.is_file():
             data = json.loads(cible.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                data = data.get("events")
             if isinstance(data, list):
-                return data
+                events = [e for e in data if isinstance(e, dict) and e.get("id")]
+                for event in events:
+                    if not event.get("verified"):
+                        # Garder l'historique, mais ne plus présenter les anciens
+                        # heartbeats comme des détections confirmées.
+                        event.update(type="unknown", acknowledged=True)
+                return events[-100:]
     except Exception:
         pass
     return []
@@ -285,117 +295,151 @@ def _sauvegarder_evenements_sonnette(events: list[dict]) -> None:
     """Saves doorbell events to disk atomically."""
     try:
         cible = runtime.app_dir() / DOORBELL_EVENTS_FILE
-        runtime._ecrire_texte_atomique(cible, json.dumps(events[-100:], indent=2))
+        runtime._ecrire_texte_atomique(cible, json.dumps(
+            {"version": 2, "events": events[-100:], "seen": DOORBELL_SEEN_EVENTS}, indent=2))
     except Exception:
         pass
 
 
 DOORBELL_EVENTS: list[dict] = _charger_evenements_sonnette()
 DOORBELL_EVENTS_LOCK = threading.Lock()
-DOORBELL_LAST_SEEN_TIMESTAMPS: dict[str, str] = {}
-DOORBELL_LAST_EVENT_TIMES: dict[str, float] = {}
-DOORBELL_CONFIG_UPDATE_UNTIL: float = 0.0
+DOORBELL_SEEN_EVENTS: dict[str, float] = {}
+try:
+    _doorbell_saved = json.loads((runtime.app_dir() / DOORBELL_EVENTS_FILE).read_text(encoding="utf-8"))
+    if isinstance(_doorbell_saved, dict) and isinstance(_doorbell_saved.get("seen"), dict):
+        DOORBELL_SEEN_EVENTS = {key: expiry for key, expiry in _doorbell_saved["seen"].items()
+                               if isinstance(key, str) and isinstance(expiry, (int, float))
+                               and time.time() < expiry <= time.time() + 600}
+except (OSError, ValueError):
+    pass
+DOORBELL_MONITOR_ERROR = ""
 DOORBELL_MONITOR_STOP = threading.Event()
 DOORBELL_MONITOR_THREAD: threading.Thread | None = None
+DOORBELL_RECORD_THREAD: threading.Thread | None = None
+DOORBELL_RECORD_QUEUE: queue.Queue = queue.Queue(maxsize=100)
 DOORBELL_MAX_EVENTS = 100
-ENREGISTREMENT_DIRECT_ARME_JUSQU_A: float = 0.0
-LIVE_VIEW_ACTIVE_UNTIL: float = 0.0
-
-
-def _prolonger_fenetre_direct(secondes: float) -> None:
-    """Prolonge la fenêtre d'inhibition des alertes sonnette dues au direct/réveil."""
-    global LIVE_VIEW_ACTIVE_UNTIL
-    LIVE_VIEW_ACTIVE_UNTIL = max(LIVE_VIEW_ACTIVE_UNTIL, time.time() + secondes)
 
 
 async def _poll_doorbells_async(blink_instance) -> list[dict]:
-    """Poll doorbell configurations from Blink API and return their current states."""
-    await blink_instance.get_homescreen()
-    home = getattr(blink_instance, "homescreen", None) or {}
-    doorbells = home.get("doorbells") or []
-    snapshots = []
-    for db in doorbells:
-        cid = str(db.get("id"))
-        nid = str(db.get("network_id"))
-        name = str(db.get("name") or cid)
-        updated_at = str(db.get("updated_at") or "")
-        enabled = bool(db.get("enabled"))
-        status = str(db.get("status") or "")
-        snapshots.append({
-            "camera_id": cid,
-            "network_id": nid,
-            "camera_name": name,
-            "updated_at": updated_at,
-            "enabled": enabled,
-            "status": status,
-        })
-    return snapshots
+    """Lit des événements explicites et leur associe la caméra stable."""
+    events = await blink_events.poll(blink_instance)
+    for event in events:
+        candidates = []
+        for sync in blink_instance.sync.values():
+            for name, camera in (getattr(sync, "cameras", None) or {}).items():
+                attributes = getattr(camera, "attributes", None) or {}
+                cid = str(getattr(camera, "device_id", None)
+                          or attributes.get("camera_id") or attributes.get("id") or "")
+                nid = str(getattr(camera, "network_id", None)
+                          or getattr(sync, "network_id", ""))
+                if nid == event["network_id"] and cid == event["camera_id"]:
+                    candidates.append(camera_key(sync, name, camera))
+        if len(candidates) == 1:
+            event["camera_key"] = candidates[0]
+    return events
+
+
+def _mettre_a_jour_enregistrement_evenement(event_id: str, **changes) -> None:
+    with DOORBELL_EVENTS_LOCK:
+        for event in DOORBELL_EVENTS:
+            if event.get("id") == event_id:
+                event.update(changes)
+                _sauvegarder_evenements_sonnette(DOORBELL_EVENTS)
+                return
+
+
+def _planifier_enregistrement_sonnette(event: dict, seconds: int) -> None:
+    if not event.get("camera_key"):
+        _mettre_a_jour_enregistrement_evenement(
+            event["id"], recording_status="failed", recording_error="Caméra introuvable")
+        return
+    _mettre_a_jour_enregistrement_evenement(event["id"], recording_status="pending")
+    try:
+        DOORBELL_RECORD_QUEUE.put_nowait((dict(event), seconds))
+    except queue.Full:
+        _mettre_a_jour_enregistrement_evenement(
+            event["id"], recording_status="failed", recording_error="File d'enregistrement pleine")
+
+
+def _publier_evenements_sonnette(events: list[dict], reglages: dict) -> None:
+    now = time.time()
+    to_record = []
+    with DOORBELL_EVENTS_LOCK:
+        for identity, expiry in list(DOORBELL_SEEN_EVENTS.items()):
+            if expiry <= now:
+                del DOORBELL_SEEN_EVENTS[identity]
+        known = {e.get("source_event_id") for e in DOORBELL_EVENTS}
+        for raw in events:
+            identity = raw["source_event_id"]
+            if identity in known or identity in DOORBELL_SEEN_EVENTS:
+                continue
+            DOORBELL_SEEN_EVENTS[identity] = now + 600
+            event = dict(raw, id=identity, created_at=now, acknowledged=False)
+            DOORBELL_EVENTS.append(event)
+            known.add(identity)
+            if reglages.get("doorbell_auto_record"):
+                to_record.append(event)
+        del DOORBELL_EVENTS[:-DOORBELL_MAX_EVENTS]
+        if events:
+            _sauvegarder_evenements_sonnette(DOORBELL_EVENTS)
+    for event in to_record:
+        _planifier_enregistrement_sonnette(event, reglages["doorbell_auto_record_seconds"])
+
+
+def _doorbell_record_loop() -> None:
+    while not DOORBELL_MONITOR_STOP.is_set():
+        try:
+            event, seconds = DOORBELL_RECORD_QUEUE.get(timeout=0.5)
+        except queue.Empty:
+            continue
+        try:
+            # Une configuration désactivée pendant l'attente ne doit pas
+            # lancer une nouvelle caméra en arrière-plan.
+            settings = runtime.lire_reglages()
+            if not (settings["doorbell_alerts_enabled"] and settings["doorbell_auto_record"]):
+                _mettre_a_jour_enregistrement_evenement(event["id"], recording_status="cancelled")
+                continue
+            handler = _EnregistreurSonnette(event)
+            handler.send_live_mse(event["camera_key"], uuid.uuid4().hex,
+                                  enregistrer=True, duree_enregistrement=seconds,
+                                  attente_module=30)
+            path = getattr(handler, "enregistrement_cree", None)
+            error = handler.error or getattr(handler, "enregistrement_erreur", "")
+            if error or path is None or not md.valid_mp4(path):
+                raise RuntimeError(error or "Aucune vidéo reçue")
+            _mettre_a_jour_enregistrement_evenement(
+                event["id"], recording_status="recorded",
+                recording_path=path.relative_to(DOSSIER_DIRECT).as_posix())
+        except Exception as error:
+            _mettre_a_jour_enregistrement_evenement(
+                event["id"], recording_status="failed", recording_error=str(error))
+            _journal_direct(event.get("camera", "sonnette"),
+                            f"enregistrement d'alerte échoué : {error}")
+        finally:
+            DOORBELL_RECORD_QUEUE.task_done()
 
 
 def _doorbell_monitor_loop() -> None:
-    """Background polling loop that detects doorbell ring and motion events."""
+    """Publie chaque événement explicite une fois, indépendamment du direct."""
+    global DOORBELL_MONITOR_ERROR
     while not DOORBELL_MONITOR_STOP.is_set():
         reglages = runtime.lire_reglages()
         interval = max(2, int(reglages.get("doorbell_poll_interval_seconds", 6)))
         if reglages.get("doorbell_alerts_enabled", True):
             try:
-                snapshots = BLINK.call(_poll_doorbells_async, timeout=15)
-                if snapshots:
-                    for snap in snapshots:
-                        cid = snap["camera_id"]
-                        updated_at = snap["updated_at"]
-                        if not updated_at:
-                            continue
-                        with DOORBELL_EVENTS_LOCK:
-                            prev = DOORBELL_LAST_SEEN_TIMESTAMPS.get(cid)
-                            if prev is None:
-                                # First observation: initialize baseline timestamp without firing alert
-                                DOORBELL_LAST_SEEN_TIMESTAMPS[cid] = updated_at
-                            elif prev != updated_at:
-                                DOORBELL_LAST_SEEN_TIMESTAMPS[cid] = updated_at
-                                # Ignore timestamp updates caused by user/admin setting changes
-                                if time.time() < DOORBELL_CONFIG_UPDATE_UNTIL:
-                                    continue
-                                # Ignore timestamp updates caused by live view wake-up or active streaming
-                                if time.time() < LIVE_VIEW_ACTIVE_UNTIL or MODULE_SLOT_INFO.get("quoi") in ("direct WebRTC", "direct MSE"):
-                                    continue
-                                # Enforce cooldown to prevent duplicate rapid triggers
-                                last_time = DOORBELL_LAST_EVENT_TIMES.get(cid, 0.0)
-                                if time.time() - last_time < 12.0:
-                                    continue
-                                DOORBELL_LAST_EVENT_TIMES[cid] = time.time()
-                                event_type = "ring" if not snap.get("enabled") else "motion"
-                                title = (
-                                    f"Doorbell Ring: {snap['camera_name']}"
-                                    if event_type == "ring"
-                                    else f"Doorbell Motion: {snap['camera_name']}"
-                                )
-                                evt = {
-                                    "id": uuid.uuid4().hex,
-                                    "camera": snap["camera_name"],
-                                    "camera_id": cid,
-                                    "network_id": snap["network_id"],
-                                    "type": event_type,
-                                    "title": title,
-                                    "timestamp": updated_at,
-                                    "created_at": time.time(),
-                                    "acknowledged": False,
-                                }
-                                DOORBELL_EVENTS.append(evt)
-                                if len(DOORBELL_EVENTS) > DOORBELL_MAX_EVENTS:
-                                    DOORBELL_EVENTS.pop(0)
-                                _sauvegarder_evenements_sonnette(DOORBELL_EVENTS)
-                                if reglages.get("doorbell_auto_record"):
-                                    ENREGISTREMENT_DIRECT_ACTIF.set()
-                                    ENREGISTREMENT_DIRECT_ARME_JUSQU_A = time.time() + 60.0
-            except Exception:
-                pass
+                events = BLINK.call(_poll_doorbells_async, timeout=30)
+                if DOORBELL_MONITOR_STOP.is_set():
+                    break
+                DOORBELL_MONITOR_ERROR = ""
+                _publier_evenements_sonnette(events, reglages)
+            except Exception as error:
+                DOORBELL_MONITOR_ERROR = str(error)
         DOORBELL_MONITOR_STOP.wait(interval)
 
 
 def demarrer_moniteur_evenements() -> None:
     """Starts the background doorbell event monitor thread."""
-    global DOORBELL_MONITOR_THREAD
+    global DOORBELL_MONITOR_THREAD, DOORBELL_RECORD_THREAD
     DOORBELL_MONITOR_STOP.clear()
     if DOORBELL_MONITOR_THREAD is None or not DOORBELL_MONITOR_THREAD.is_alive():
         DOORBELL_MONITOR_THREAD = threading.Thread(
@@ -404,13 +448,39 @@ def demarrer_moniteur_evenements() -> None:
             daemon=True,
         )
         DOORBELL_MONITOR_THREAD.start()
+    if DOORBELL_RECORD_THREAD is None or not DOORBELL_RECORD_THREAD.is_alive():
+        DOORBELL_RECORD_THREAD = threading.Thread(
+            target=_doorbell_record_loop, name="doorbell_recorder", daemon=True)
+        DOORBELL_RECORD_THREAD.start()
 
 
 def arreter_moniteur_evenements() -> None:
     """Stops the background doorbell event monitor thread."""
     DOORBELL_MONITOR_STOP.set()
+    with DIRECT_WEBRTC_SESSION_LOCK:
+        holder = DIRECT_MSE_SESSION.get("session")
+        if holder and holder.get("automatic_recording"):
+            holder["arret"].set()
     if DOORBELL_MONITOR_THREAD is not None and DOORBELL_MONITOR_THREAD.is_alive():
         DOORBELL_MONITOR_THREAD.join(timeout=2.0)
+    if DOORBELL_RECORD_THREAD is not None and DOORBELL_RECORD_THREAD.is_alive():
+        # Laisser le pipeline fermer son fichier et sa session Blink avant
+        # que le processus ne sorte. Le parent garde son repli d'arrêt forcé.
+        DOORBELL_RECORD_THREAD.join(timeout=10.0)
+    cancelled = set()
+    while True:
+        try:
+            event, _seconds = DOORBELL_RECORD_QUEUE.get_nowait()
+        except queue.Empty:
+            break
+        cancelled.add(event["id"])
+        DOORBELL_RECORD_QUEUE.task_done()
+    if cancelled:
+        with DOORBELL_EVENTS_LOCK:
+            for event in DOORBELL_EVENTS:
+                if event.get("id") in cancelled:
+                    event["recording_status"] = "cancelled"
+            _sauvegarder_evenements_sonnette(DOORBELL_EVENTS)
 
 
 
@@ -548,6 +618,44 @@ def _chemin_enregistrement_direct(name: str) -> Path:
     suffixe = hashlib.sha256(empreinte.encode("utf-8")).hexdigest()[:12]
     nom_fichier = f"{horodatage}_{camera}_{identifiant}_{suffixe}.mp4"
     return DOSSIER_DIRECT / camera / maintenant.strftime("%Y-%m") / nom_fichier
+
+
+def _fermer_enregistrement_direct(fichier) -> None:
+    """Ne conserve que les fragments complets après un arrêt entre deux blocs.
+
+    Un bloc de lecture peut finir au milieu d'un mdat. Garder sa boîte moof
+    laisserait un MP4 tronqué, écarté par l'inventaire et donc invisible.
+    """
+    path = Path(fichier.name)
+    fichier.close()
+    size = path.stat().st_size
+    position = 0
+    fragment_start = None
+    with path.open("r+b") as saved:
+        while position + 8 <= size:
+            saved.seek(position)
+            header = saved.read(8)
+            box_size = int.from_bytes(header[:4], "big")
+            kind = header[4:8]
+            header_size = 8
+            if kind == b"moof":
+                fragment_start = position
+            if box_size == 1:
+                extended = saved.read(8)
+                if len(extended) != 8:
+                    break
+                box_size = int.from_bytes(extended, "big")
+                header_size = 16
+            elif box_size == 0:
+                box_size = size - position
+            if box_size < header_size or position + box_size > size:
+                break
+            position += box_size
+            if kind == b"mdat":
+                fragment_start = None
+        complete = fragment_start if fragment_start is not None else position
+        if complete < size:
+            saved.truncate(complete)
 
 
 def read_entries(paths: dict) -> dict:
@@ -1214,6 +1322,7 @@ class LecteurTube:
     def __init__(self, pipe, taille_bloc: int = 16384):
         self._file: queue.Queue = queue.Queue()
         self._fin = False
+        self._pipe = pipe
 
         def lire_en_continu():
             while True:
@@ -1222,7 +1331,15 @@ class LecteurTube:
                 if not morceau:
                     return
 
-        threading.Thread(target=lire_en_continu, daemon=True).start()
+        self._thread = threading.Thread(target=lire_en_continu, daemon=True)
+        self._thread.start()
+
+    def fermer(self):
+        # Appelé après l'arrêt de ffmpeg : EOF libère la lecture bloquante.
+        self._thread.join(timeout=1)
+        close = getattr(self._pipe, "close", None)
+        if not self._thread.is_alive() and callable(close):
+            close()
 
     def lire(self, delai: float):
         """Un bloc de données ; ``b""`` si le tube est à sa vraie fin (EOF) ;
@@ -1266,6 +1383,7 @@ class DetecteurDebutFragment:
     def __init__(self):
         self._restant_boite = 0
         self._entete = b""
+        self.fragment_vu = False
 
     def bloc_ouvre_un_fragment(self, chunk: bytes) -> bool:
         sur_frontiere_avant = self._restant_boite == 0 and not self._entete
@@ -1286,6 +1404,8 @@ class DetecteurDebutFragment:
             if len(self._entete) < 8:
                 break
             taille = int.from_bytes(self._entete[:4], "big")
+            if self._entete[4:8] == b"moof":
+                self.fragment_vu = True
             self._entete = b""
             if taille < 8:
                 self._restant_boite = 0  # boîte dégénérée : abandonne le suivi
@@ -1539,8 +1659,19 @@ class BlinkSession:
             async def run():
                 try:
                     if self.blink is None:
+                        if self.session is not None:
+                            await self.session.close()
                         self.session = blink_auth.session_http()
-                        self.blink = await blink_auth.connect_saved(self.session)
+                        try:
+                            self.blink = await blink_auth.connect_saved(self.session)
+                            if self.blink is None:
+                                raise RuntimeError(
+                                    "Session Blink absente ou expirée. Reconnectez-vous "
+                                    "depuis le bouton Actualiser.")
+                        except BaseException:
+                            failed_session, self.session = self.session, None
+                            await failed_session.close()
+                            raise
                     if self.blink is None:
                         raise RuntimeError(
                             "Session Blink absente ou expirée. Reconnectez-vous "
@@ -2012,22 +2143,25 @@ def _preparer_reglages_web(payload: dict) -> tuple[str, dict]:
     reglages["live_auto_stop_seconds"] = live_auto_stop_seconds
 
     # Doorbell alerts and recording settings (Feature 1)
-    reglages["doorbell_alerts_enabled"] = bool(payload.get("doorbell_alerts_enabled", True))
-    reglages["doorbell_auto_record"] = bool(payload.get("doorbell_auto_record", False))
+    current = runtime.lire_reglages()
+    for field in ("doorbell_alerts_enabled", "doorbell_auto_record", "doorbell_chime_enabled"):
+        value = payload.get(field, current[field])
+        if not isinstance(value, bool):
+            raise _ReglagesInvalides(f"{field} : booléen attendu")
+        reglages[field] = value
     try:
-        auto_record_sec = int(payload.get("doorbell_auto_record_seconds", 30) or 30)
-        if not 5 <= auto_record_sec <= LIVE_MAX_SECONDS:
-            auto_record_sec = 30
-    except (TypeError, ValueError):
-        auto_record_sec = 30
+        auto_record_sec = int(payload.get("doorbell_auto_record_seconds", current["doorbell_auto_record_seconds"]))
+        if not 5 <= auto_record_sec <= 300:
+            raise ValueError
+    except (TypeError, ValueError) as error:
+        raise _ReglagesInvalides("La durée d'enregistrement de sonnette doit être entre 5 et 300 secondes.") from error
     reglages["doorbell_auto_record_seconds"] = auto_record_sec
-    reglages["doorbell_chime_enabled"] = bool(payload.get("doorbell_chime_enabled", True))
     try:
-        poll_interval_sec = int(payload.get("doorbell_poll_interval_seconds", 6) or 6)
+        poll_interval_sec = int(payload.get("doorbell_poll_interval_seconds", current["doorbell_poll_interval_seconds"]))
         if not 2 <= poll_interval_sec <= 60:
-            poll_interval_sec = 6
-    except (TypeError, ValueError):
-        poll_interval_sec = 6
+            raise ValueError
+    except (TypeError, ValueError) as error:
+        raise _ReglagesInvalides("L'intervalle de lecture des événements doit être entre 2 et 60 secondes.") from error
     reglages["doorbell_poll_interval_seconds"] = poll_interval_sec
 
     return dossier, reglages
@@ -2612,9 +2746,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return state
 
     def set_armed(self, scope: str, identity: str, armed: bool) -> None:
-        global DOORBELL_CONFIG_UPDATE_UNTIL
-        DOORBELL_CONFIG_UPDATE_UNTIL = time.time() + 20.0
-
         def apply(blink):
             async def run(_blink=blink):
                 if scope == "system":
@@ -2669,7 +2800,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if not MODULE_SLOT.acquire(blocking=False):
             raise blink_engine.BusyError(_slot_occupe_message())
-        _prolonger_fenetre_direct(90.0)
         try:
             _slot_pris("reveil", identity)
             # Le verrou memoire protege les directs de ce serveur ; celui
@@ -2741,7 +2871,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if not MODULE_SLOT.acquire(blocking=False):
             raise blink_engine.BusyError(_slot_occupe_message())
-        _prolonger_fenetre_direct(90.0)
         try:
             _slot_pris("snapshot", identity)
             with blink_engine.hub_lock("snapshot", attente=ATTENTE_HUB_MAX_SECONDS):
@@ -2986,7 +3115,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         _slot_rendu()
                     finally:
                         MODULE_SLOT.release()
-                        _prolonger_fenetre_direct(45.0)
 
         async def _nettoyer() -> None:
             try:
@@ -3041,11 +3169,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             _slot_pris("direct WebRTC", name)
             journal("direct WebRTC commence")
-            _prolonger_fenetre_direct(60.0)
-            if time.time() > ENREGISTREMENT_DIRECT_ARME_JUSQU_A and not runtime.lire_reglages().get("doorbell_auto_record"):
-                ENREGISTREMENT_DIRECT_ACTIF.clear()
-            else:
+            if payload.get("enregistrer") is True:
                 ENREGISTREMENT_DIRECT_ACTIF.set()
+            else:
+                ENREGISTREMENT_DIRECT_ACTIF.clear()
             _effacer_erreur_direct()
             holder["lock"] = blink_engine.hub_lock("direct", attente=ATTENTE_HUB_MAX_SECONDS)
             holder["lock"].__enter__()
@@ -3138,11 +3265,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
 
         try:
-            self.send_json({"sdp": answer_sdp, "type": answer_type, "session_id": session_id})
+            self.send_json({"sdp": answer_sdp, "type": answer_type, "session_id": session_id,
+                            "actif": ENREGISTREMENT_DIRECT_ACTIF.is_set()})
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             _demander_arret_direct(session_id)
 
-    def send_live_mse(self, name: str, session_id: str = "") -> None:
+    def send_live_mse(self, name: str, session_id: str = "", *,
+                      enregistrer: bool = False, duree_enregistrement: float = 0,
+                      attente_module: float = 0) -> None:
         """Diffuse le direct d'une caméra en fMP4 fragmenté, pour MediaSource.
 
         Face à /live (MJPEG) : au lieu de faire réencoder chaque image en
@@ -3174,7 +3304,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # un identifiant mal formé perd juste le bénéfice de l'arrêt
             # explicite, le direct lui-même n'a pas besoin de session_id.
             session_id = ""
-        if not MODULE_SLOT.acquire(blocking=False):
+        if not (MODULE_SLOT.acquire(timeout=attente_module) if attente_module
+                else MODULE_SLOT.acquire(blocking=False)):
             message = _slot_occupe_message()
             _memoriser_erreur_direct(name, message, 409)
             _journal_direct(name, f"refusee (MSE), {message}")
@@ -3184,7 +3315,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_error(409, "Live stream busy")
             return
 
-        holder: dict = {"session_id": session_id, "arret": threading.Event()}
+        holder: dict = {"session_id": session_id, "arret": threading.Event(),
+                        "automatic_recording": bool(duree_enregistrement)}
+        if duree_enregistrement and DOORBELL_MONITOR_STOP.is_set():
+            MODULE_SLOT.release()
+            self.send_error(503, "Recording cancelled")
+            return
         if session_id:
             with DIRECT_WEBRTC_SESSION_LOCK:
                 DIRECT_MSE_SESSION["session"] = holder
@@ -3194,11 +3330,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         journaux_nettoyage: list = []
         try:
             _slot_pris("direct MSE", name)
-            _prolonger_fenetre_direct(60.0)
-            if time.time() > ENREGISTREMENT_DIRECT_ARME_JUSQU_A and not runtime.lire_reglages().get("doorbell_auto_record"):
-                ENREGISTREMENT_DIRECT_ACTIF.clear()
-            else:
+            if enregistrer:
                 ENREGISTREMENT_DIRECT_ACTIF.set()
+            else:
+                ENREGISTREMENT_DIRECT_ACTIF.clear()
             # Une tentative réellement admise remplace l'ancien diagnostic.
             # En particulier, un 409 ne doit jamais faire relire au navigateur
             # le 503 d'une tentative précédente de la même caméra.
@@ -3315,6 +3450,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             holder["drain"].start()
 
             lecteur = LecteurTube(process.stdout)
+            holder["lecteur"] = lecteur
             first = read_mp4_init_segment(lecteur, LIVE_FIRST_FRAME_SECONDS)
             _journal_direct(name, f"segment initial {len(first)} octets")
             if not first:
@@ -3399,7 +3535,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         if data is not first:
                             fichier_direct.write(data)
                         holder["fichier_direct"] = fichier_direct
+                        self.enregistrement_cree = chemin
                     except OSError as error:
+                        ENREGISTREMENT_DIRECT_ACTIF.clear()
+                        self.enregistrement_erreur = str(error)
+                        if fichier_direct is not None:
+                            try:
+                                fichier_direct.close()
+                            except OSError:
+                                pass
                         fichier_direct = None
                         _journal_direct(
                             name, f"enregistrement impossible, "
@@ -3407,7 +3551,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         )
                 elif not desire and fichier_direct is not None:
                     try:
-                        fichier_direct.close()
+                        _fermer_enregistrement_direct(fichier_direct)
                     except OSError as error:
                         _journal_direct(
                             name, f"echec de fermeture de l'enregistrement, "
@@ -3418,11 +3562,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     try:
                         fichier_direct.write(data)
                     except OSError as error:
+                        ENREGISTREMENT_DIRECT_ACTIF.clear()
+                        self.enregistrement_erreur = str(error)
+                        try:
+                            _fermer_enregistrement_direct(fichier_direct)
+                        except OSError:
+                            pass
                         holder["fichier_direct"] = None
                         _journal_direct(
                             name, f"enregistrement interrompu, "
                                   f"{type(error).__name__}: {error}"
                         )
+                if (holder.get("fichier_direct") is not None
+                        and holder.get("recording_started") is None
+                        and detecteur_fragments.fragment_vu):
+                    holder["recording_started"] = time.monotonic()
+                    if hasattr(self, "enregistrement_commence"):
+                        self.enregistrement_commence()
                 try:
                     self.wfile.write(data)
                     return True
@@ -3441,9 +3597,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # resté ouvert plus de 600 s, MODULE_SLOT jamais rendu). lire()
             # porte maintenant elle-même un délai réel sur chaque lecture.
             deadline = time.monotonic() + LIVE_MAX_SECONDS
+            attente_premier_fragment = time.monotonic() + LIVE_FIRST_FRAME_SECONDS
             while time.monotonic() < deadline:
                 if holder["arret"].is_set():
                     break  # /api/arreter-direct : ne pas attendre un bloc qui peut ne jamais venir
+                if (duree_enregistrement and holder.get("recording_started") is None
+                        and time.monotonic() >= attente_premier_fragment):
+                    raise RuntimeError("Aucune image reçue pour l'enregistrement")
+                if (duree_enregistrement and holder.get("recording_started") is not None
+                        and time.monotonic() - holder["recording_started"] >= duree_enregistrement):
+                    break
                 chunk = lecteur.lire(
                     min(LIVE_MSE_ARRET_POLL_SECONDS, deadline - time.monotonic())
                 )
@@ -3458,7 +3621,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except Exception as error:
             erreur_direct = str(error) if isinstance(error, RuntimeError) \
                 else f"{type(error).__name__}: {error}"
+            if duree_enregistrement:
+                self.enregistrement_erreur = erreur_direct
         finally:
+            ENREGISTREMENT_DIRECT_ACTIF.clear()
             if session_id:
                 with DIRECT_WEBRTC_SESSION_LOCK:
                     if DIRECT_MSE_SESSION.get("session") is holder:
@@ -3476,6 +3642,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 except subprocess.TimeoutExpired:
                     try:
                         process.kill()
+                        process.wait(timeout=5)
                     except Exception as error:
                         journaux_nettoyage.append(
                             f"echec de kill ffmpeg, {type(error).__name__}: {error}"
@@ -3484,10 +3651,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     journaux_nettoyage.append(
                         f"echec d'attente ffmpeg, {type(error).__name__}: {error}"
                     )
+                try:
+                    reader = holder.get("lecteur")
+                    if reader is not None:
+                        reader.fermer()
+                    drain = holder.get("drain")
+                    if drain is not None:
+                        drain.join(timeout=1)
+                    close = getattr(process.stderr, "close", None)
+                    if callable(close) and (drain is None or not drain.is_alive()):
+                        close()
+                except Exception as error:
+                    journaux_nettoyage.append(f"echec de fermeture des tubes ffmpeg : {error}")
             fichier_direct = holder.get("fichier_direct")
             if fichier_direct is not None:
                 try:
-                    fichier_direct.close()
+                    _fermer_enregistrement_direct(fichier_direct)
                 except OSError as error:
                     journaux_nettoyage.append(
                         f"echec de fermeture de l'enregistrement, "
@@ -3531,7 +3710,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 _slot_rendu()
             finally:
                 MODULE_SLOT.release()
-                _prolonger_fenetre_direct(45.0)
 
             # Diagnostic seulement après avoir rendu toutes les ressources :
             # sa lecture attend un fil et manipulait auparavant bytes comme str,
@@ -3677,8 +3855,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
 
         if route.startswith("/live-mse/"):
-            session_id = parse_qs(urlparse(self.path).query).get("session_id", [""])[0]
-            self.send_live_mse(unquote(route[len("/live-mse/"):]), session_id)
+            query = parse_qs(urlparse(self.path).query)
+            session_id = query.get("session_id", [""])[0]
+            if query.get("enregistrer", [""])[0] == "1":
+                self.send_live_mse(unquote(route[len("/live-mse/"):]), session_id,
+                                   enregistrer=True)
+            else:
+                self.send_live_mse(unquote(route[len("/live-mse/"):]), session_id)
             return
 
         if route == "/api/events":
@@ -3689,8 +3872,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except (TypeError, ValueError):
                 since = 0.0
             with DOORBELL_EVENTS_LOCK:
-                events = [e for e in DOORBELL_EVENTS if e.get("created_at", 0) >= since]
-                unacked = [e for e in DOORBELL_EVENTS if not e.get("acknowledged")]
+                events = [dict(e) for e in DOORBELL_EVENTS if e.get("created_at", 0) >= since]
+                unacked = [dict(e) for e in DOORBELL_EVENTS if not e.get("acknowledged")]
             self.send_json({
                 "events": events,
                 "unacknowledged": unacked,
@@ -3699,6 +3882,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "doorbell_auto_record_seconds": int(reglages.get("doorbell_auto_record_seconds", 30)),
                 "doorbell_chime_enabled": bool(reglages.get("doorbell_chime_enabled", True)),
                 "server_time": time.time(),
+                "monitor_error": DOORBELL_MONITOR_ERROR,
             })
             return
 
@@ -3725,6 +3909,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_json({
                 "authenticated": (runtime.app_dir() / "blink_auth.json").is_file(),
                 "initial_setup": self.initial_setup,
+                "pid": os.getpid(),
+                "version": VERSION_AFFICHEE,
             })
             return
 
@@ -4492,7 +4678,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_error(code)
 
     def do_POST(self):
-        global ENREGISTREMENT_DIRECT_ARME_JUSQU_A
         if not self.hote_autorise() or not self.jeton_valide():
             self._refuser(403)
             return
@@ -4640,6 +4825,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if route == "/api/events/test":
             camera_name = str(payload.get("camera") or "")
+            camera_identity = ""
             if not camera_name or camera_name in ("Doorbell", "Test Doorbell"):
                 try:
                     state = self.system_state()
@@ -4651,11 +4837,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                             name_low = (c.get("name") or "").lower()
                             if "lotus" in model or "lotus" in kind or "doorbell" in model or "doorbell" in name_low:
                                 real_cam = c.get("name")
+                                camera_identity = c.get("key") or ""
                                 break
                         if real_cam:
                             break
                     if not real_cam and state.get("systems") and state["systems"][0].get("cameras"):
                         real_cam = state["systems"][0]["cameras"][0].get("name")
+                        camera_identity = state["systems"][0]["cameras"][0].get("key") or ""
                     camera_name = real_cam or "Doorbell"
                 except Exception:
                     camera_name = "Doorbell"
@@ -4666,6 +4854,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "camera": camera_name,
                 "camera_id": "test_doorbell",
                 "network_id": "test_net",
+                "camera_key": camera_identity,
+                "verified": True,
+                "test": True,
                 "type": "ring",
                 "title": f"Doorbell Event: {camera_name}",
                 "timestamp": now_iso,
@@ -4679,8 +4870,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 _sauvegarder_evenements_sonnette(DOORBELL_EVENTS)
             reglages = runtime.lire_reglages()
             if reglages.get("doorbell_auto_record"):
-                ENREGISTREMENT_DIRECT_ACTIF.set()
-                ENREGISTREMENT_DIRECT_ARME_JUSQU_A = time.time() + 60.0
+                _planifier_enregistrement_sonnette(evt, reglages["doorbell_auto_record_seconds"])
             self.send_json({"ok": True, "event": evt})
             return
 
@@ -4697,18 +4887,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     )
                     if session_id and holder["session_id"] != session_id:
                         autorise = False
-                elif MODULE_SLOT_INFO.get("quoi") == "direct MSE":
-                    autorise = not session_id or session_id == "mse"
+                elif DIRECT_MSE_SESSION.get("session") is not None:
+                    holder = DIRECT_MSE_SESSION["session"]
+                    autorise = ((not session_id or holder["session_id"] == session_id)
+                                and not holder["arret"].is_set()
+                                and not holder.get("automatic_recording"))
+                elif MODULE_SLOT_INFO.get("quoi") == "direct MSE" and not session_id:
+                    autorise = True  # Ancien lecteur MSE sans identifiant.
                 else:
-                    autorise = True
+                    autorise = False
 
                 if autorise:
                     if actif_voulu:
                         ENREGISTREMENT_DIRECT_ACTIF.set()
-                        ENREGISTREMENT_DIRECT_ARME_JUSQU_A = time.time() + 60.0
                     else:
                         ENREGISTREMENT_DIRECT_ACTIF.clear()
-                        ENREGISTREMENT_DIRECT_ARME_JUSQU_A = 0.0
 
             if not autorise:
                 self.send_json({"error": "Cette session de direct n'est plus active."}, 409)
@@ -5106,6 +5299,10 @@ __CSS__
         <label for="doorbellAutoRecordSeconds" data-i18n="reglages.doorbellAutoRecordSeconds">Durée d'enregistrement auto (secondes)</label>
         <input type="number" id="doorbellAutoRecordSeconds" min="5" max="300" placeholder="30">
       </div>
+      <div class="champCadence">
+        <label for="doorbellPollSeconds" data-i18n="reglages.doorbellPollSeconds">Intervalle de lecture des événements (secondes)</label>
+        <input type="number" id="doorbellPollSeconds" min="2" max="60" placeholder="6">
+      </div>
       <div style="margin-top: 8px;">
         <button type="button" id="btnTestDoorbellAlert" data-i18n="doorbell.test">Tester l'alerte de sonnette</button>
       </div>
@@ -5192,7 +5389,8 @@ PAGE = PAGE.replace(
 # La page est un gabarit constant, plein d'accolades CSS et JavaScript :
 # impossible d'en faire une f-string. Une substitution unique au chargement
 # suffit, et laisse le gabarit lisible.
-PAGE = PAGE.replace("__VERSION__", runtime.version_affichee())
+VERSION_AFFICHEE = runtime.version_affichee()
+PAGE = PAGE.replace("__VERSION__", VERSION_AFFICHEE)
 # Le PID à côté de la version distingue en un coup d'œil un onglet resté
 # ouvert sur l'ancien processus de celui qui vient de repartir après un
 # redémarrage : les deux affichent la même page tant que l'onglet ne
@@ -5211,7 +5409,41 @@ SCRIPT_NONCE = uuid.uuid4().hex
 PAGE = PAGE.replace("__SCRIPT_NONCE__", SCRIPT_NONCE)
 
 
+class _PuitsDirect:
+    def write(self, data: bytes) -> int:
+        return len(data)
+
+
+class _EnregistreurSonnette(Handler):
+    """Même pipeline MSE et même nettoyage Blink, sans connexion navigateur."""
+
+    def __init__(self, event: dict):
+        self.event_id = event["id"]
+        self.camera_identity = event["camera_key"]
+        self.wfile = _PuitsDirect()
+        self.error = ""
+
+    def send_response(self, code, message=None):
+        if code >= 400:
+            self.error = message or f"HTTP {code}"
+
+    def send_header(self, keyword, value):
+        pass
+
+    def end_headers(self):
+        pass
+
+    def send_error(self, code, message=None, explain=None):
+        detail = _derniere_erreur_direct()
+        self.error = (detail.get("message") if detail.get("camera") == self.camera_identity
+                      else None) or message or f"HTTP {code}"
+
+    def enregistrement_commence(self):
+        _mettre_a_jour_enregistrement_evenement(self.event_id, recording_status="recording")
+
+
 def parse_args() -> argparse.Namespace:
+    settings = runtime.lire_reglages()
     parser = argparse.ArgumentParser(
         prog="blink2video serve",
         description=msg("aide_desc"),
@@ -5222,7 +5454,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--monthly-output", type=Path, default=md.DEFAULT_MONTHLY)
     parser.add_argument("--normalized-output", type=Path, default=md.DEFAULT_NORMALIZED)
     parser.add_argument("--excluded-output", type=Path, default=md.DEFAULT_EXCLUDED)
-    parser.add_argument("--timezone", default="Europe/Paris")
+    parser.add_argument("--timezone", default=settings["timezone"])
     parser.add_argument("--hub", help=msg("aide_hub"))
     # Avec les sorties : les vignettes et les exclusions de directs
     # (DIRECT_EXCLUSION) décrivent ces vidéos-là, et les suivent.
@@ -5230,8 +5462,8 @@ def parse_args() -> argparse.Namespace:
         "--thumbs", type=Path, default=runtime.dossier_sorties() / ".blink_thumbs",
         help=msg("aide_thumbs"),
     )
-    parser.add_argument("--port", type=runtime.port_valide, default=8765)
-    parser.add_argument("--trusted-host", default="", help=msg("aide_trusted_host"))
+    parser.add_argument("--port", type=runtime.port_valide, default=settings["port"])
+    parser.add_argument("--trusted-host", default=settings["trusted_host"], help=msg("aide_trusted_host"))
     parser.add_argument("--initial-setup", action="store_true",
                         help=argparse.SUPPRESS)
     parser.add_argument(
@@ -5332,6 +5564,13 @@ def main() -> int:
         print(msg("echec_ecoute_port", port=args.port, erreur=error))
         print(msg("autre_instance_deja"))
         return 1
+    if not args.initial_setup:
+        try:
+            runtime.assurer_instance([["serve", *sys.argv[1:]]])
+        except (OSError, runtime.BusyError) as error:
+            server.server_close()
+            print(msg("erreur_generique", erreur=error))
+            return 1
     url = f"http://127.0.0.1:{args.port}/"
     print(msg("interface_disponible", url=url))
     if bind not in ("127.0.0.1", "localhost"):

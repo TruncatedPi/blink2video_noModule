@@ -8,7 +8,17 @@ echo ========================================================
 echo  Stopping Blink Connect Server
 echo ========================================================
 echo.
-powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*serve.py*' -or $_.CommandLine -like '*blink2video*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
+set "PYTHON=%~dp0.venv\Scripts\python.exe"
+if not exist "%PYTHON%" (
+    set "PYTHON=python.exe"
+)
+
+"%PYTHON%" blink2video.py stop
+if errorlevel 1 (
+    echo The application could not be fully stopped. See the message above.
+    pause
+    exit /b 1
+)
 
 echo Server stopped.
 ping 127.0.0.1 -n 2 >nul

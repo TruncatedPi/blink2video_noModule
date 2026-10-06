@@ -70,7 +70,7 @@ const ids = [
   'initialSetupHint', 'reglagesClose', 'stopButton', 'reglages', 'reglagesButton',
   'webhookUrl', 'webhookRegenerer', 'fontSize', 'fontColor', 'boxOpacity',
   'trustedHost', 'webhookNotifUrl', 'liveAutoStopSeconds', 'redemarrerButton',
-  'doorbellAlertsEnabled', 'doorbellChimeEnabled', 'doorbellAutoRecord', 'doorbellAutoRecordSeconds',
+  'doorbellAlertsEnabled', 'doorbellChimeEnabled', 'doorbellAutoRecord', 'doorbellAutoRecordSeconds', 'doorbellPollSeconds',
   'tabGeneral', 'tabVideo', 'tabAcces', 'tabAlertes',
   'panelGeneral', 'panelVideo', 'panelAcces', 'panelAlertes',
 ];
@@ -192,6 +192,7 @@ function capturer() {
             "trustedHost": "trusted_host", "webhookNotifUrl": "webhook_notif_url",
             "liveAutoStopSeconds": "live_auto_stop_seconds",
             "doorbellAutoRecordSeconds": "doorbell_auto_record_seconds",
+            "doorbellPollSeconds": "doorbell_poll_interval_seconds",
         }
         cases = {
             "timestamp": "timestamp", "mergeJour": "merge_jour", "mergeSemaine": "merge_semaine",

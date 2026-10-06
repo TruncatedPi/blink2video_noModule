@@ -40,6 +40,11 @@ lancement et les principaux réglages.
 - Enregistrement du direct à la demande, un clic pendant le visionnage :
   conservé dans sa propre archive, consultable et filtrable exactement comme
   les clips de détection (écarter, supprimer, filtre caméra et période).
+- Alertes de sonnette fondées sur des événements Blink explicites (bouton ou
+  mouvement), sans confondre heartbeat, photo et changement de configuration.
+  L'enregistrement automatique facultatif tourne côté serveur, même navigateur
+  fermé, et sa durée commence à l'arrivée de la vidéo. L'historique indique
+  l'attente, l'enregistrement, la sauvegarde ou l'échec avec son explication.
 - Photo à la demande, un clic depuis la vignette du direct ou déclenchée à
   distance via une URL webhook (domotique, bouton connecté) : conservée dans
   Photos, consultable et supprimable depuis la page.
@@ -83,6 +88,12 @@ en rouge) : un clic pour commencer à sauvegarder le direct dans `Blink_Direct`,
 un clic pour arrêter. Les enregistrements apparaissent dans Directs
 Enregistrements, consultables et filtrables exactement comme les clips de
 détection.
+
+Activez l'enregistrement automatique de sonnette dans Réglages → Alertes.
+Les événements disponibles et leur délai dépendent de Blink et du compte ou
+stockage utilisé. Un module occupé peut retarder ou empêcher l'enregistrement :
+l'historique garde alors son erreur. Les anciennes entrées déduites des relevés
+de caméra sont conservées comme non confirmées et ne déclenchent plus d'alertes.
 
 ![L'onglet Clips](Screenshots/serve0.fr.PNG)
 
@@ -158,6 +169,11 @@ démarrer automatiquement à l'ouverture de session, actualiser la page toute
 seule à l'arrivée des clips, la fréquence de lecture du stockage local et du cloud,
 et un bouton pour tout arrêter. `blink2video autostart on` et `blink2video stop`
 font la même chose depuis un terminal, si vous préférez.
+
+Redémarrer remplace le processus serveur et recharge les fichiers de l'application.
+Arrêter attend la disparition du serveur avant de la confirmer. Les lancements
+depuis les sources par `start.cmd` ou `serve.py` utilisent le même suivi de
+processus que les boutons web ; `stop.cmd` arrête aussi ces processus suivis.
 
 <details>
 <summary>Depuis les sources, avec Python 3.11 ou plus récent</summary>

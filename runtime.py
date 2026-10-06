@@ -1603,6 +1603,27 @@ def lire_instances(journal=None) -> list:
     return vivantes
 
 
+def assurer_instance(entrees: list) -> Path:
+    """Inscrit aussi un programme lancé directement, sans doubler son parent.
+
+    Les enfants lancés par self_command() passent par leur propre fichier
+    .py. Le verrou laisse leur superviseur finir la publication des PID avant
+    de chercher la fiche qui les contient. Une variable héritée seule ne
+    suffit pas : elle peut appartenir à une session déjà terminée.
+    """
+    with verrou_controle("launch", attente=10):
+        pid = os.getpid()
+        identite = identite_processus(pid)
+        for fiche in lire_instances():
+            membres = [fiche["pid"], *(fiche.get("enfants") or [])]
+            identites = fiche.get("identites") or {}
+            attendue = identites.get(str(pid)) if isinstance(identites, dict) else None
+            if pid in membres and identite is not None and attendue == identite:
+                os.environ[INSTANCE_PID_ENV] = str(fiche["pid"])
+                return Path(fiche["fiche"])
+        return inscrire_instance(entrees)
+
+
 def _fiche_courante() -> Path:
     # Les verbes tournent dans des processus enfants du superviseur qui porte
     # la fiche. Celui-ci transmet son PID par l'environnement : sans cela un

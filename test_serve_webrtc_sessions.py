@@ -270,6 +270,21 @@ class TestsSessionsDirect(unittest.TestCase):
         self.post("/api/direct-enregistrement", {"actif": True})
         self.assertTrue(serve.ENREGISTREMENT_DIRECT_ACTIF.is_set())
 
+    def test_ouvrir_direct_ordinaire_ne_filme_pas_meme_si_auto_record_active(self):
+        with mock.patch.object(serve.runtime, "lire_reglages", return_value={"doorbell_auto_record": True}):
+            self.ouvrir()
+        self.assertFalse(serve.ENREGISTREMENT_DIRECT_ACTIF.is_set())
+
+    def test_demande_enregistrement_voyage_avec_session_sans_heritage(self):
+        handler = self.handler()
+        handler.send_offer_webrtc("Camera factice", {
+            "sdp": "v=0\r\n", "type": "offer", "session_id": SESSION_A, "enregistrer": True})
+        self.assertTrue(handler.send_json.call_args.args[0]["actif"])
+        serve._demander_arret_direct(SESSION_A)
+        self.attendre_fin()
+        self.ouvrir(session_id=SESSION_B)
+        self.assertFalse(serve.ENREGISTREMENT_DIRECT_ACTIF.is_set())
+
 
 class TestsBudgetSession(unittest.TestCase):
     def test_attente_du_verrou_est_comprise_dans_le_timeout(self):

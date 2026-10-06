@@ -36,6 +36,11 @@ and the main settings.
 - Live view recording on demand, one click while watching: saved to its own
   archive, browsable and filterable exactly like detection clips (discard,
   delete, camera and period filter).
+- Doorbell alerts use explicit Blink motion/button events. Heartbeats,
+  snapshots and configuration changes do not count as detections. Optional
+  automatic recording runs on the server, even with the browser closed;
+  its duration starts when video arrives. Event history shows queued,
+  recording, saved or failed status, with any recording error.
 - On-demand camera snapshot, one click from the Live tile or triggered
   remotely through a webhook URL (home automation, a smart button): saved
   under Pictures, browsable and deletable from the page.
@@ -74,6 +79,12 @@ old they are.
 The Record button, mid-recording ("Stop recording", in red): one click to start
 saving the current stream to `Blink_Direct`, one to stop. Recordings appear
 under Live Recordings, browsable and filterable exactly like detection clips.
+
+Enable doorbell auto-recording in Settings → Alerts. Available event records
+and polling latency depend on Blink and the account/storage setup. A busy
+module can delay or prevent recording; the event retains its error in History.
+Older history entries created from camera status timestamps are retained as
+unverified entries and do not trigger new alerts.
 
 ![The Clips tab](Screenshots/serve0.PNG)
 
@@ -141,6 +152,11 @@ your desktop's tray support), with Open/Restart/Stop, no terminal needed.
 when you log in, refresh the page on its own as clips arrive, how often local
 storage and cloud are checked, and a button to stop everything. `blink2video autostart on`
 and `blink2video stop` do the same from a terminal, if you'd rather.
+
+Restart replaces the server process and loads the application files again.
+Stop waits for the server to exit before confirming. Source launches through
+`start.cmd` or `serve.py` use the same process tracking as the web controls;
+`stop.cmd` stops those tracked processes too.
 
 <details>
 <summary>From source, with Python 3.11 or newer</summary>

@@ -31,6 +31,7 @@ import serve  # noqa: E402 - bootstrap neutralisé avant import
 class TestAppliquerSelectionNAttendPasLeVerrouRegistre(unittest.TestCase):
     def setUp(self) -> None:
         self.temporaire = tempfile.TemporaryDirectory(prefix="blink_toggle_lock_test_")
+        self.travail_termine = None
         self.racine = Path(self.temporaire.name)
         self.paths = {
             "input": self.racine / "clips",
@@ -76,9 +77,14 @@ class TestAppliquerSelectionNAttendPasLeVerrouRegistre(unittest.TestCase):
             json.dumps(registre), encoding="utf-8")
 
     def tearDown(self) -> None:
-        self.patch_lancer.stop()
-        self.patch_app_dir.stop()
-        self.temporaire.cleanup()
+        try:
+            if self.travail_termine is not None:
+                self.assertTrue(self.travail_termine.wait(timeout=10),
+                                "le travail d'exclusion ne s'est pas terminé")
+        finally:
+            self.patch_lancer.stop()
+            self.patch_app_dir.stop()
+            self.temporaire.cleanup()
 
     def construire_handler(self):
         # Un vrai Handler, sans passer par __init__ (qui attend une vraie
@@ -120,6 +126,16 @@ class TestAppliquerSelectionNAttendPasLeVerrouRegistre(unittest.TestCase):
 
         try:
             handler = self.construire_handler()
+            self.travail_termine = threading.Event()
+            appliquer = handler._appliquer_exclusions_clips
+
+            def appliquer_puis_confirmer(*args):
+                try:
+                    appliquer(*args)
+                finally:
+                    self.travail_termine.set()
+
+            handler._appliquer_exclusions_clips = appliquer_puis_confirmer
             debut = time.monotonic()
             reponses = self.appeler(handler, {"exclure": [self.identity]})
             duree = time.monotonic() - debut

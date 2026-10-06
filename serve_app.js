@@ -271,6 +271,14 @@ const I18N = {
     "events.viewHistory": "📋 Historique",
     "events.unreadMany": "{n} non lus",
     "events.viewRecordings": "📁 Enregistrements du direct",
+    "events.unknown": "Ancienne entrée non confirmée",
+    "events.recording.pending": "Enregistrement en attente",
+    "events.recording.recording": "Enregistrement en cours",
+    "events.recording.recorded": "Vidéo enregistrée",
+    "events.recording.failed": "Échec de l'enregistrement",
+    "events.recording.cancelled": "Enregistrement annulé",
+    "events.pollError": "Lecture des événements indisponible",
+    "reglages.doorbellPollSeconds": "Intervalle de lecture des événements (secondes)",
   },
   en: {
     "view.live": "Live Views", "view.direct": "Live Recordings",
@@ -477,6 +485,14 @@ const I18N = {
     "events.viewHistory": "📋 History",
     "events.unreadMany": "{n} unread",
     "events.viewRecordings": "📁 Live Recordings",
+    "events.unknown": "Unverified older entry",
+    "events.recording.pending": "Recording queued",
+    "events.recording.recording": "Recording in progress",
+    "events.recording.recorded": "Video saved",
+    "events.recording.failed": "Recording failed",
+    "events.recording.cancelled": "Recording cancelled",
+    "events.pollError": "Event polling unavailable",
+    "reglages.doorbellPollSeconds": "Event polling interval (seconds)",
   },
 };
 let _lang = "fr";
@@ -1403,7 +1419,7 @@ function ajouterSegmentMse(sourceBuffer, value, signal) {
 
 // Un cycle connexion -> flux -> fin. Renvoie si au moins une image est
 // arrivée (utilisé par watchMse pour décider de réessayer ou d'abandonner).
-async function connecterMse(name, video, signalGlobal, texteAttente, t0, reveilInitial, sessionId) {
+async function connecterMse(name, video, signalGlobal, texteAttente, t0, reveilInitial, sessionId, enregistrer = false) {
   const box = $("live-" + cssId(name));
   let hint = $("hint-" + cssId(name));
   if (box && !hint) {
@@ -1466,7 +1482,7 @@ async function connecterMse(name, video, signalGlobal, texteAttente, t0, reveilI
 
     response = await operationOuAbandon(
       () => fetch(
-        `/live-mse/${encodeURIComponent(name)}?session_id=${encodeURIComponent(sessionId)}`,
+        `/live-mse/${encodeURIComponent(name)}?session_id=${encodeURIComponent(sessionId)}${enregistrer ? "&enregistrer=1" : ""}`,
         { signal },
       ), signal
     );
@@ -1491,6 +1507,10 @@ async function connecterMse(name, video, signalGlobal, texteAttente, t0, reveilI
     }
 
     const codec = response.headers.get("X-Codec") || "avc1.42E01E";
+    if (enregistrer && box) {
+      const bouton = box.querySelector('[data-action="toggle-record"]');
+      if (bouton) appliquerEtatEnregistrement(bouton, true);
+    }
     const mimeType = `video/mp4; codecs="${codec}"`;
     if (!MediaSource.isTypeSupported(mimeType)) {
       throw new Error(tf("watch.codec.unsupported", { codec }));
@@ -1631,7 +1651,7 @@ async function attendreModuleLibre(signal) {
   }
 }
 
-async function watchLive(name) {
+async function watchLive(name, enregistrer = false) {
   // Enregistrer le choix avant toute attente. Un clic plus récent invalide
   // aussi les demandes dont /attente-module n'a pas encore répondu.
   for (const autre of nomsDirectsActifs()) stopWatch(autre);
@@ -1659,7 +1679,7 @@ async function watchLive(name) {
     // Ces fonctions installent leur contrôleur avant leur première attente :
     // la grille reste protégée quand LIVE_PENDING est retiré dans le finally.
     return system && system.webrtc
-      ? watchWebRTC(name, controller, t0) : watchMse(name);
+      ? watchWebRTC(name, controller, t0, enregistrer) : watchMse(name, enregistrer);
   } catch (error) {
     if (budgetEcoule && LIVE_PENDING[name] === controller) failWatch(name, t("watch.noimage"));
     else if (error.name !== "AbortError") failWatch(name, String(error.message || error));
@@ -1669,7 +1689,7 @@ async function watchLive(name) {
   }
 }
 
-async function watchWebRTC(name, controller = new AbortController(), t0 = performance.now()) {
+async function watchWebRTC(name, controller = new AbortController(), t0 = performance.now(), enregistrer = false) {
   if (controller.signal.aborted) return;
   const box = $("live-" + cssId(name));
   if (!box) return;
@@ -1728,7 +1748,7 @@ async function watchWebRTC(name, controller = new AbortController(), t0 = perfor
         afficherIndice(tf(lent ? "watch.waking.slow" : "watch.waking.seconds", { s }));
       }, 500) : null;
       try {
-        await tenterWebRTC(name, video, controller.signal, ++essais, confirmerLecture);
+        await tenterWebRTC(name, video, controller.signal, ++essais, confirmerLecture, enregistrer);
         if (!directContinu(name)) break;
         echecs = 0;
         derniereErreur = null;
@@ -1744,6 +1764,8 @@ async function watchWebRTC(name, controller = new AbortController(), t0 = perfor
         if (error.webrtcLecture) echecs = 0;
         else if (error.status !== 409) echecs++;
       } finally {
+        const bouton = box.querySelector('[data-action="toggle-record"]');
+        if (lecture && bouton?.classList) enregistrer = bouton.classList.contains("active");
         if (minuteur !== null) { clearInterval(minuteur); minuteur = null; }
       }
       if (controller.signal.aborted || echecs >= WEBRTC_MAX_ECHECS) break;
@@ -1771,7 +1793,7 @@ async function watchWebRTC(name, controller = new AbortController(), t0 = perfor
 
 // Garder la tentative jusqu'à la fin du flux permet un nettoyage identique
 // après erreur ICE, absence d'image, annulation pendant l'offre ou lecture.
-async function tenterWebRTC(name, video, signal, essai, surLecture = () => {}) {
+async function tenterWebRTC(name, video, signal, essai, surLecture = () => {}, enregistrer = false) {
   if (signal.aborted) throw erreurAnnulationMse();
   const sessionId = nouvelIdentifiantDirect();
   const controller = new AbortController();
@@ -1878,6 +1900,7 @@ async function tenterWebRTC(name, video, signal, essai, surLecture = () => {}) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         sdp: pc.localDescription.sdp, type: pc.localDescription.type, essai, session_id: sessionId,
+        ...(enregistrer ? { enregistrer: true } : {}),
       }),
       signal: controller.signal,
     }), controller.signal);
@@ -1888,6 +1911,10 @@ async function tenterWebRTC(name, video, signal, essai, surLecture = () => {}) {
       throw error;
     }
     if (info.session_id !== sessionId) throw new Error(t("watch.refused"));
+    if (enregistrer) {
+      const bouton = $("live-" + cssId(name))?.querySelector('[data-action="toggle-record"]');
+      if (bouton) appliquerEtatEnregistrement(bouton, Boolean(info.actif));
+    }
     await operationOuAbandon(() => pc.setRemoteDescription({ sdp: info.sdp, type: info.type }),
       controller.signal);
     if (!lecture) idPremiereImage = setTimeout(() => finir(new Error(t("watch.noimage"))),
@@ -1924,7 +1951,7 @@ async function tenterWebRTC(name, video, signal, essai, surLecture = () => {}) {
   }
 }
 
-async function watchMse(name) {
+async function watchMse(name, enregistrer = false) {
   const box = $("live-" + cssId(name));
   box.innerHTML =
     `<video autoplay muted playsinline></video>
@@ -1962,8 +1989,10 @@ async function watchMse(name) {
       const texte = reveilInitial ? t("watch.waking") : t("watch.reconnecting");
       try {
         const aLu = await connecterMse(
-          name, video, controller.signal, texte, t0, reveilInitial, sessionId
+          name, video, controller.signal, texte, t0, reveilInitial, sessionId, enregistrer
         );
+        const bouton = box.querySelector('[data-action="toggle-record"]');
+        if (aLu && bouton?.classList) enregistrer = bouton.classList.contains("active");
         lecturePendantBudget = lecturePendantBudget || aLu;
         derniereErreur = null;
         echecsAVide = aLu ? 0 : echecsAVide + 1;
@@ -2074,8 +2103,8 @@ function appliquerEtatEnregistrement(bouton, actif) {
 // l'état supposé du bouton avant le clic - deux onglets sur le même direct
 // restent ainsi cohérents l'un avec l'autre.
 async function toggleRecord(name, bouton) {
-  const sessionId = WEBRTC_SESSION[name];
-  if (!sessionId && !MSE_ABORT[name]) return;
+  const sessionId = WEBRTC_SESSION[name] || MSE_SESSION[name];
+  if (!sessionId) return;
   const actif = !bouton.classList.contains("active");
   bouton.disabled = true;
   try {
@@ -2084,7 +2113,7 @@ async function toggleRecord(name, bouton) {
       body: JSON.stringify({ actif, session_id: sessionId }),
     });
     const info = await lireJSON(reponse);
-    if (!reponse.ok || info.error || WEBRTC_SESSION[name] !== sessionId) return;
+    if (!reponse.ok || info.error || (WEBRTC_SESSION[name] || MSE_SESSION[name]) !== sessionId) return;
     appliquerEtatEnregistrement(bouton, Boolean(info.actif));
   } catch (erreur) {
     // Rien de plus utile a afficher qu'un bouton resté sur son état
@@ -3045,6 +3074,7 @@ function afficherFormulaireReglages(reglages) {
     $("doorbellChimeEnabled").checked = reglages.doorbell_chime_enabled ?? true;
     $("doorbellAutoRecord").checked = reglages.doorbell_auto_record ?? false;
     $("doorbellAutoRecordSeconds").value = reglages.doorbell_auto_record_seconds || 30;
+    if ($("doorbellPollSeconds")) $("doorbellPollSeconds").value = reglages.doorbell_poll_interval_seconds || 6;
   }
   afficherUrlWebhook(reglages.webhook_token);
 }
@@ -3318,6 +3348,7 @@ async function envoyerFormulaireReglages({ usb, cloud, port, timezone }) {
       doorbell_chime_enabled: $("doorbellChimeEnabled") ? $("doorbellChimeEnabled").checked : true,
       doorbell_auto_record: $("doorbellAutoRecord") ? $("doorbellAutoRecord").checked : false,
       doorbell_auto_record_seconds: Number($("doorbellAutoRecordSeconds")?.value) || 30,
+      ...($("doorbellPollSeconds") ? {doorbell_poll_interval_seconds: Number($("doorbellPollSeconds").value)} : {}),
     }) });
   return lireJSON(reponse);
 }
@@ -3477,17 +3508,24 @@ $("stopButton").onclick = async () => {
       return;
     }
   } catch (erreur) { /* la réponse peut ne pas arriver, l'arrêt est déjà lancé */ }
-  document.body.innerHTML = `<p class="empty">${t("stop.stopped")}</p>`;
-  // « accepté » n'est pas « terminé ». Si le serveur répond encore après le
-  // délai maximal de grâce + kill, rendre l'échec visible au lieu d'affirmer
-  // indéfiniment que l'application est arrêtée.
-  setTimeout(async () => {
-    try {
-      const reponse = await fetch("/api/status", { cache: "no-store" });
-      if (reponse.ok) {
-        document.body.innerHTML = `<p class="empty">${t("stop.failed")}</p>`;
-      }
-    } catch (erreur) { /* disparition attendue : arrêt confirmé */ }
+  for (const name of nomsDirectsActifs()) stopWatch(name);
+  document.body.innerHTML = `<p class="empty">${t("stop.stopping")}</p>`;
+  // « accepté » n'est pas « terminé » : attendre la disparition effective
+  // avant de l'annoncer, et garder un délai de garde en cas d'échec du relais.
+  let termine = false;
+  let delai = null;
+  const attente = setInterval(async () => {
+    if (await etatServeur() !== "absent" || termine) return;
+    termine = true;
+    clearInterval(attente);
+    clearTimeout(delai);
+    document.body.innerHTML = `<p class="empty">${t("stop.stopped")}</p>`;
+  }, 1000);
+  delai = setTimeout(() => {
+    if (termine) return;
+    termine = true;
+    clearInterval(attente);
+    document.body.innerHTML = `<p class="empty">${t("stop.failed")}</p>`;
   }, 30000);
 };
 
@@ -3599,8 +3637,13 @@ load();
 // --- Doorbell event monitoring (Feature 1) ---
 
 let currentDoorbellEvent = null;
-let lastAlertedEventId = null;
-let doorbellAutoRecordTimer = null;
+const evenementsSonnetteAnnonces = new Set((() => {
+  try {
+    const ids = JSON.parse(localStorage.getItem("blink_alerted_event_ids") || "[]");
+    return Array.isArray(ids) ? ids.slice(-100) : [];
+  } catch (error) { return []; }
+})());
+let generationEvenements = 0;
 
 // Synthesizes a two-tone chime (Ding-Dong) using Web Audio API
 function playDoorbellChime() {
@@ -3664,12 +3707,13 @@ function montrerBandeauAlerte(evt, serverSettings) {
   }
 
   // Trigger sound, notification, and auto-record once per unique event ID
-  const lastAlerted = (typeof localStorage !== "undefined" ? localStorage.getItem("blink_last_alerted_event_id") : null) || lastAlertedEventId;
-  if (evt.id !== lastAlerted) {
-    if (typeof localStorage !== "undefined") {
-      try { localStorage.setItem("blink_last_alerted_event_id", evt.id); } catch (e) {}
+  if (!evenementsSonnetteAnnonces.has(evt.id)) {
+    evenementsSonnetteAnnonces.add(evt.id);
+    if (evenementsSonnetteAnnonces.size > 100) {
+      evenementsSonnetteAnnonces.delete(evenementsSonnetteAnnonces.values().next().value);
     }
-    lastAlertedEventId = evt.id;
+    try { localStorage.setItem("blink_alerted_event_ids", JSON.stringify([...evenementsSonnetteAnnonces])); }
+    catch (error) { /* stockage privé ou indisponible */ }
 
     // Only chime, notify desktop, and auto-record if event is fresh (within 90 seconds)
     const eventTime = evt.timestamp ? new Date(evt.timestamp).getTime() : (evt.created_at ? evt.created_at * 1000 : Date.now());
@@ -3689,14 +3733,13 @@ function montrerBandeauAlerte(evt, serverSettings) {
           Notification.requestPermission().catch(() => {});
         }
       }
-      if (serverSettings && serverSettings.doorbell_auto_record) {
-        lancerEnregistrementDepuisAlerte(evt, serverSettings.doorbell_auto_record_seconds || 30);
-      }
+      // L'enregistrement automatique appartient au serveur : aucun onglet
+      // ne doit le dupliquer, ni ouvrir une caméra à chaque actualisation.
     }
   }
 }
 
-async function trouverCleCamera(nomCamera) {
+async function trouverCleCamera(cible) {
   if (!system || !system.systems) {
     try {
       system = await lireJSON(await fetch("/api/system"));
@@ -3705,31 +3748,14 @@ async function trouverCleCamera(nomCamera) {
     }
   }
   if (!system || !system.systems) return null;
-  // Match exact name or key
-  for (const s of system.systems) {
-    for (const c of s.cameras) {
-      if (c.name === nomCamera || c.key === nomCamera) return c.key;
-    }
-  }
-  // Match camera containing "lotus" or "doorbell"
-  for (const s of system.systems) {
-    for (const c of s.cameras) {
-      const model = (c.model || "").toLowerCase();
-      const kind = (c.kind || "").toLowerCase();
-      const name = (c.name || "").toLowerCase();
-      if (model.includes("lotus") || kind.includes("lotus") || model.includes("doorbell") || name.includes("doorbell")) {
-        return c.key;
-      }
-    }
-  }
-  // Fallback to first camera
-  for (const s of system.systems) {
-    if (s.cameras && s.cameras.length > 0) return s.cameras[0].key;
-  }
-  return null;
+  const nom = typeof cible === "string" ? cible : cible?.camera;
+  const key = typeof cible === "object" ? cible?.camera_key : null;
+  const cameras = system.systems.flatMap(s => s.cameras || []);
+  const matches = cameras.filter(c => key ? c.key === key : c.name === nom || c.key === nom);
+  return matches.length === 1 ? matches[0].key : null;
 }
 
-async function ouvrirDirectCamera(nomCamera) {
+async function ouvrirDirectCamera(cible, enregistrer = false) {
   if ($("view").value !== "live") {
     $("view").value = "live";
     pageClips = 0;
@@ -3741,49 +3767,20 @@ async function ouvrirDirectCamera(nomCamera) {
   } else {
     renderLive();
   }
-  const cle = await trouverCleCamera(nomCamera);
+  const cle = await trouverCleCamera(cible);
   if (!cle) return null;
+  if (enregistrer && nomsDirectsActifs().includes(cle)) stopWatch(cle);
   if (!nomsDirectsActifs().includes(cle)) {
     // Start live stream in background without awaiting completion (watchLive runs until stopped)
-    watchLive(cle);
+    watchLive(cle, enregistrer);
   }
   return cle;
 }
 
-async function lancerEnregistrementDepuisAlerte(evt, dureeAuto) {
-  const nomCamera = evt ? evt.camera : null;
-  // 1. Arm recording on server immediately
-  await fetch("/api/direct-enregistrement", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ actif: true }),
-  }).catch(() => {});
-
-  // 2. Open live stream
-  const cle = await ouvrirDirectCamera(nomCamera);
-  if (!cle) return;
-
-  // 3. Mark the record button as active once card is rendered
-  const maxAttente = 15000;
-  const t0 = performance.now();
-  const pollSession = setInterval(async () => {
-    const cadre = $("live-" + cssId(cle));
-    const recBtn = cadre?.querySelector('[data-action="toggle-record"]');
-    if (recBtn || (performance.now() - t0 > maxAttente)) {
-      if (recBtn) {
-        appliquerEtatEnregistrement(recBtn, true);
-      }
-      clearInterval(pollSession);
-    }
-  }, 400);
-
-  // 4. Auto-stop timer if configured
-  if (dureeAuto > 0) {
-    if (doorbellAutoRecordTimer) clearTimeout(doorbellAutoRecordTimer);
-    doorbellAutoRecordTimer = setTimeout(() => {
-      stopWatch(cle);
-    }, dureeAuto * 1000);
-  }
+async function lancerEnregistrementDepuisAlerte(evt) {
+  // L'intention voyage avec la nouvelle session. Aucun drapeau global armé
+  // avant le réveil, aucun minuteur susceptible d'abattre un autre direct.
+  return ouvrirDirectCamera(evt, true);
 }
 
 // Banner action buttons
@@ -3803,8 +3800,7 @@ if ($("btnAlertDismiss")) {
 if ($("btnAlertHistory")) {
   $("btnAlertHistory").onclick = () => {
     $("view").value = "events";
-    pageClips = 0;
-    render();
+    $("view").onchange();
   };
 }
 
@@ -3819,7 +3815,7 @@ if ($("btnAlertWatch")) {
       }).catch(() => {});
     }
     cacherBandeauAlerte();
-    await ouvrirDirectCamera(evt ? evt.camera : null);
+    await ouvrirDirectCamera(evt);
   };
 }
 
@@ -3834,7 +3830,7 @@ if ($("btnAlertRecord")) {
       }).catch(() => {});
     }
     cacherBandeauAlerte();
-    await lancerEnregistrementDepuisAlerte(evt, 0);
+    await lancerEnregistrementDepuisAlerte(evt);
   };
 }
 
@@ -3855,16 +3851,22 @@ if ($("btnTestDoorbellAlert")) {
 
 // Historical events view rendering
 async function renderEvents() {
+  if ($("view").value !== "events") return;
+  const generation = ++generationEvenements;
   $("count").textContent = "";
   $("list").innerHTML = `<p class="empty">${t("sourdine.loading")}</p>`;
   try {
     const res = await fetch("/api/events");
     const data = await lireJSON(res);
+    if ($("view").value !== "events" || generation !== generationEvenements) return;
     const events = (data.events || []).slice().reverse();
+    const pollingError = data.monitor_error
+      ? `<p class="empty">${h(t("events.pollError"))} · ${h(data.monitor_error)}</p>` : "";
     if (!events.length) {
       $("list").innerHTML = `
         <div style="padding: 20px; text-align: center;">
           <p class="empty">${t("events.empty")}</p>
+          ${pollingError}
           <div style="margin-top: 15px;">
             <button type="button" id="btnEventsTest" class="primary">${t("doorbell.test")}</button>
           </div>
@@ -3876,9 +3878,11 @@ async function renderEvents() {
     const rows = events.map(evt => {
       const isUnack = !evt.acknowledged;
       const isRing = evt.type === "ring";
-      const icon = isRing ? "🔔" : "🚶";
+      const icon = isRing ? "🔔" : evt.type === "motion" ? "🚶" : "⚪";
       const dateStr = evt.timestamp ? new Date(evt.timestamp).toLocaleString() : "";
-      const typeLabel = t(isRing ? "events.ring" : "events.motion");
+      const typeLabel = t(isRing ? "events.ring" : evt.type === "motion" ? "events.motion" : "events.unknown");
+      const recording = evt.recording_status
+        ? `${t("events.recording." + evt.recording_status)}${evt.recording_error ? " · " + evt.recording_error : ""}` : "";
       const unackBadge = isUnack ? `<span class="badgeNew" style="background:#e74c3c;color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:bold;margin-left:8px;">${t("events.unack")}</span>` : "";
 
       return `
@@ -3890,14 +3894,14 @@ async function renderEvents() {
                 ${h(typeLabel)} · ${h(evt.camera)} ${unackBadge}
               </div>
               <div class="sub" style="font-size:12px; color:var(--dim); margin-top:3px;">
-                ${h(dateStr)}
+                ${h(dateStr)}${recording ? " · " + h(recording) : ""}
               </div>
             </div>
           </div>
           <div style="display:flex; align-items:center; gap:8px;">
-            <button type="button" class="act in" data-action="event-record" data-camera="${h(evt.camera)}" data-id="${h(evt.id)}">${t("doorbell.recordLive")}</button>
-            <button type="button" class="act" data-action="event-watch" data-camera="${h(evt.camera)}" data-id="${h(evt.id)}">${t("doorbell.watchLive")}</button>
-            <button type="button" class="act" data-action="event-view-recordings" data-camera="${h(evt.camera)}" title="${h(t("events.viewRecordings"))}">${t("events.viewRecordings")}</button>
+            <button type="button" class="act in" data-action="event-record" data-camera="${h(evt.camera)}" data-camera-key="${h(evt.camera_key || "")}" data-id="${h(evt.id)}">${t("doorbell.recordLive")}</button>
+            <button type="button" class="act" data-action="event-watch" data-camera="${h(evt.camera)}" data-camera-key="${h(evt.camera_key || "")}" data-id="${h(evt.id)}">${t("doorbell.watchLive")}</button>
+            <button type="button" class="act" data-action="event-view-recordings" data-id="${h(evt.id)}" title="${h(t("events.viewRecordings"))}">${t("events.viewRecordings")}</button>
             ${isUnack ? `<button type="button" class="act out" data-action="event-ack" data-id="${h(evt.id)}">✓</button>` : ""}
           </div>
         </div>`;
@@ -3914,11 +3918,10 @@ async function renderEvents() {
         </div>
       </div>
       <div class="eventsList">${rows}</div>`;
+    if (pollingError) $("list").insertAdjacentHTML("beforeend", pollingError);
 
     $("btnEventsViewRecordings")?.addEventListener("click", () => {
-      $("view").value = "direct";
-      pageClips = 0;
-      render();
+      afficherEnregistrementsSonnette();
     });
 
     $("btnEventsAckAll")?.addEventListener("click", async () => {
@@ -3957,12 +3960,7 @@ async function renderEvents() {
 
     $("list").querySelectorAll('[data-action="event-view-recordings"]').forEach(btn => {
       btn.onclick = () => {
-        $("view").value = "direct";
-        if (btn.dataset.camera && $("camera")) {
-          $("camera").value = btn.dataset.camera;
-        }
-        pageClips = 0;
-        render();
+        afficherEnregistrementsSonnette(events.find(e => e.id === btn.dataset.id));
       };
     });
 
@@ -3973,7 +3971,7 @@ async function renderEvents() {
           body: JSON.stringify({ event_id: btn.dataset.id })
         }).catch(() => {});
         cacherBandeauAlerte();
-        await ouvrirDirectCamera(btn.dataset.camera);
+        await ouvrirDirectCamera({camera: btn.dataset.camera, camera_key: btn.dataset.cameraKey});
       };
     });
 
@@ -3984,22 +3982,41 @@ async function renderEvents() {
           body: JSON.stringify({ event_id: btn.dataset.id })
         }).catch(() => {});
         cacherBandeauAlerte();
-        await lancerEnregistrementDepuisAlerte({ camera: btn.dataset.camera }, 0);
+        await lancerEnregistrementDepuisAlerte({camera: btn.dataset.camera, camera_key: btn.dataset.cameraKey});
       };
     });
 
   } catch (err) {
+    if ($("view").value !== "events" || generation !== generationEvenements) return;
     $("list").innerHTML = `<p class="empty">${h(String(err))}</p>`;
   }
 }
 
+async function afficherEnregistrementsSonnette(evt = null) {
+  for (const name of nomsDirectsActifs()) stopWatch(name);
+  $("view").value = "direct";
+  pageClips = 0;
+  await load();
+  if ($("view").value !== "direct") return;
+  const camera = $("camera");
+  const nom = evt?.recording_path?.split("/")[0] || evt?.camera;
+  if (camera && nom && [...camera.options].some(option => option.value === nom)) {
+    camera.value = nom;
+    render();
+  }
+}
+
 // Background doorbell event polling loop
+let derniereVersionEvenements = "";
 (function veillerEvenementsSonnette() {
   setTimeout(async () => {
     try {
       const res = await fetch("/api/events");
       if (res.ok) {
         const payload = await lireJSON(res);
+        const version = JSON.stringify([payload.events, payload.monitor_error]);
+        if (version !== derniereVersionEvenements && $("view").value === "events") renderEvents();
+        derniereVersionEvenements = version;
         if (payload && payload.doorbell_alerts_enabled) {
           const unacked = payload.unacknowledged || [];
           if (unacked.length > 0) {

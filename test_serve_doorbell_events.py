@@ -15,6 +15,7 @@ import os
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 os.environ["BLINK_BOOTSTRAP"] = "none"
@@ -111,6 +112,40 @@ class TestDoorbellEvents(unittest.TestCase):
         self.assertEqual(reglages["doorbell_auto_record_seconds"], 45)
         self.assertFalse(reglages["doorbell_chime_enabled"])
         self.assertEqual(reglages["doorbell_poll_interval_seconds"], 10)
+
+    def test_reglages_omis_conservent_valeurs_existantes(self) -> None:
+        settings = dict(runtime.REGLAGES_DEFAUT, doorbell_auto_record=True,
+                        doorbell_auto_record_seconds=45, doorbell_poll_interval_seconds=37)
+        with mock.patch.object(runtime, "lire_reglages", return_value=settings):
+            _, prepared = serve._preparer_reglages_web(
+                {"timezone": "UTC", "usb_minutes": 10, "cloud_minutes": 1, "port": 8765})
+        for field in ("doorbell_auto_record", "doorbell_auto_record_seconds", "doorbell_poll_interval_seconds"):
+            self.assertEqual(prepared[field], settings[field])
+
+    def test_reglages_invalides_ne_se_reinitialisent_pas_en_silence(self) -> None:
+        for payload, expected in (({"doorbell_auto_record": "false"}, "booléen"),
+                                  ({"doorbell_auto_record_seconds": 420}, "durée"),
+                                  ({"doorbell_poll_interval_seconds": 0}, "intervalle")):
+            with self.subTest(payload=payload), self.assertRaisesRegex(serve._ReglagesInvalides, expected):
+                serve._preparer_reglages_web(dict(payload, timezone="UTC", usb_minutes=10,
+                                                 cloud_minutes=1, port=8765))
+
+    def test_ancien_historique_est_conserve_mais_non_confirme(self) -> None:
+        path = self.root / serve.DOORBELL_EVENTS_FILE
+        path.write_text(json.dumps([{"id": "old-heartbeat", "type": "motion", "acknowledged": False}]), encoding="utf-8")
+        with mock.patch.object(runtime, "app_dir", return_value=self.root):
+            events = serve._charger_evenements_sonnette()
+        self.assertEqual(events[0]["type"], "unknown")
+        self.assertTrue(events[0]["acknowledged"])
+
+    def test_etat_versionne_recharge_evenements_confirmes(self) -> None:
+        path = self.root / serve.DOORBELL_EVENTS_FILE
+        path.write_text(json.dumps({"version": 2, "events": [{"id": "new-ring", "type": "ring",
+                        "verified": True, "acknowledged": False}], "seen": {}}), encoding="utf-8")
+        with mock.patch.object(runtime, "app_dir", return_value=self.root):
+            events = serve._charger_evenements_sonnette()
+        self.assertEqual(events[0]["type"], "ring")
+        self.assertFalse(events[0]["acknowledged"])
 
     def test_get_events_empty(self) -> None:
         """GET /api/events returns empty lists when no events exist."""
@@ -216,22 +251,22 @@ class TestDoorbellEvents(unittest.TestCase):
         for key in required_i18n_keys:
             self.assertIn(f'"{key}":', app_js, f"Missing i18n key {key} in serve_app.js")
 
-    def test_prolonger_fenetre_direct_suppresses_alerts(self) -> None:
-        """Verifies that _prolonger_fenetre_direct extends LIVE_VIEW_ACTIVE_UNTIL into the future."""
-        serve.LIVE_VIEW_ACTIVE_UNTIL = 0.0
-        serve._prolonger_fenetre_direct(45.0)
-        self.assertGreater(serve.LIVE_VIEW_ACTIVE_UNTIL, time.time() + 40.0)
+    def test_evenement_reel_pendant_direct_autre_camera_est_conserve(self) -> None:
+        event = {"source_event_id": "real-ring", "camera": "Porte", "type": "ring",
+                 "timestamp": "2026-10-05T12:00:00+00:00", "verified": True}
+        with mock.patch.object(serve, "MODULE_SLOT_INFO", {"quoi": "direct WebRTC", "name": "Jardin"}), \
+             mock.patch.object(serve, "DOORBELL_SEEN_EVENTS", {}), \
+             mock.patch.object(serve, "_sauvegarder_evenements_sonnette"):
+            serve._publier_evenements_sonnette([event], {"doorbell_auto_record": False})
+        self.assertEqual([e["type"] for e in serve.DOORBELL_EVENTS], ["ring"])
 
-    def test_post_arm_suppresses_doorbell_alerts(self) -> None:
-        """Verifies that calling set_armed arms DOORBELL_CONFIG_UPDATE_UNTIL to suppress false alerts."""
+    def test_post_arm_ne_cree_aucune_alerte(self) -> None:
         handler = self.build_handler()
-        t_before = time.time()
-        # Mock set_armed behavior
-        serve.DOORBELL_CONFIG_UPDATE_UNTIL = 0.0
         handler.set_armed = lambda scope, name, armed: None
         handler.system_state = lambda: {"systems": []}
         code, res = self.call_post(handler, "/api/arm", {"name": "TestCam", "scope": "camera", "armed": True})
         self.assertEqual(code, 200)
+        self.assertEqual(serve.DOORBELL_EVENTS, [])
 
     def test_describe_camera_enabled_priority(self) -> None:
         """Verifies that describe_camera uses info['enabled'] from homescreen."""

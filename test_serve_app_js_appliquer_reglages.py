@@ -18,7 +18,7 @@ class TestsApplicationReglagesJS(unittest.TestCase):
             raise unittest.SkipTest("node introuvable")
         source = (Path(__file__).parent / "serve_app.js").read_text(encoding="utf-8")
         debut = source.index("// Même déroulé que le bouton de mise à jour")
-        fin = source.index('$("stopButton").onclick', debut)
+        fin = source.index('// Les cartes sont reconstruites', debut)
         lire_json = re.search(
             r"^async function lireJSON\(.*?^\}", source, re.DOTALL | re.MULTILINE,
         )
@@ -41,6 +41,10 @@ class TestsApplicationReglagesJS(unittest.TestCase):
 const params = JSON.parse(process.argv[1]);
 const requetes = [], alertes = [], delais = [], etapes = [];
 let fermetures = 0, rechargements = 0, identifiant = 0;
+const directsArretes = [];
+const nomsDirectsActifs = () => ['Porte'];
+const stopWatch = name => directsArretes.push(name);
+const document = {body: {innerHTML: 'application'}};
 const intervalles = new Map(), temporisations = new Map();
 globalThis.setInterval = (fonction, delai) => {
   const id = ++identifiant;
@@ -61,7 +65,7 @@ const elements = Object.fromEntries(Object.entries({
   storageDir: ' clips ', liveProtocol: 'mse',
   fontSize: '', fontColor: 'white', boxOpacity: '0.55',
   trustedHost: '100.101.194.5', webhookNotifUrl: 'https://exemple.invalid/notif',
-  liveAutoStopSeconds: '0', doorbellAutoRecordSeconds: '30',
+  liveAutoStopSeconds: '0', doorbellAutoRecordSeconds: '30', doorbellPollSeconds: '6',
 }).map(([id, value]) => [id, {value}]));
 for (const [id, checked] of Object.entries({
   timestamp: true, mergeJour: true, mergeSemaine: false,
@@ -72,6 +76,7 @@ for (const [id, value] of Object.entries(params.valeurs || {})) elements[id].val
 for (const [id, checked] of Object.entries(params.coches || {})) elements[id].checked = checked;
 elements.reglagesApply = {disabled: false, textContent: 'reglages.apply'};
 elements.redemarrerButton = {disabled: false, textContent: 'reglages.restart'};
+elements.stopButton = {disabled: false, textContent: 'reglages.stop'};
 elements.reglages = {close: () => { fermetures += 1; }};
 elements.phase = {textContent: 'prêt'};
 elements.bar = {
@@ -103,7 +108,7 @@ const attentePost = new Promise((resolve) => { libererPost = resolve; });
 const statuts = [...(params.statuts || [])];
 globalThis.fetch = async (url, options) => {
   requetes.push({url, options: options || null});
-  if (url === '/api/reglages' || url === '/api/redemarrer') {
+  if (url === '/api/reglages' || url === '/api/redemarrer' || url === '/api/stop') {
     await attentePost;
     if (params.post === 'reseau') throw new TypeError('Connexion interrompue');
     return {json: async () => {
@@ -132,6 +137,7 @@ function instantane() {
   return {
     bouton: {...elements.reglagesApply},
     boutonRedemarrer: {...elements.redemarrerButton}, fermetures, rechargements,
+    corps: document.body.innerHTML, directsArretes: [...directsArretes],
     phase: elements.phase.textContent,
     barre: {value: elements.bar.value, indetermine: elements.bar.indetermine},
     travail: classes.has('on'), refreshBloque: elements.refresh.disabled,
@@ -237,6 +243,7 @@ function instantane() {
             "doorbell_chime_enabled": True,
             "doorbell_auto_record": False,
             "doorbell_auto_record_seconds": 30,
+            "doorbell_poll_interval_seconds": 6,
         })
         self._verifier_attente(resultat["apresPost"], 2000, 45000)
         self.assertEqual(resultat["alertes"], [])
@@ -308,6 +315,28 @@ function instantane() {
             "disabled": False, "textContent": "reglages.restart",
         })
         self.assertEqual(resultat["alertes"], [])
+
+    def test_stop_attend_disparition_avant_d_annoncer_arret(self):
+        resultat = self._executer(bouton="stopButton", statuts=[{}, "reseau"], actions=["poll", "poll"])
+        self.assertIn("stop.stopping", resultat["apresPost"]["corps"])
+        self.assertEqual(resultat["apresPost"]["directsArretes"], ["Porte"])
+        self.assertIn("stop.stopping", resultat["etapes"][0]["corps"])
+        self.assertIn("stop.stopped", resultat["etapes"][1]["corps"])
+        self.assertEqual(resultat["etapes"][1]["intervalles"], [])
+        self.assertEqual(resultat["etapes"][1]["temporisations"], [])
+
+    def test_stop_restant_vivant_ou_remplace_est_un_echec(self):
+        for statut in ({}, "jeton"):
+            with self.subTest(statut=statut):
+                resultat = self._executer(bouton="stopButton", statuts=[statut], actions=["poll", 30000])
+                self.assertIn("stop.failed", resultat["etapes"][-1]["corps"])
+                self.assertEqual(resultat["etapes"][-1]["intervalles"], [])
+
+    def test_stop_refuse_ne_masque_pas_application(self):
+        resultat = self._executer(bouton="stopButton", reponse={"error": "Arrêt refusé"})
+        self.assertEqual(resultat["alertes"], ["Arrêt refusé"])
+        self.assertEqual(resultat["apresPost"]["corps"], "application")
+        self.assertEqual(resultat["apresPost"]["intervalles"], [])
 
     def test_bouton_redemarrer_refuse_garde_le_formulaire_ouvert(self):
         resultat = self._executer(
