@@ -12,6 +12,7 @@ import datetime as dt
 import hashlib
 import json
 import time
+from urllib.parse import urlencode
 
 from blinkpy import api
 
@@ -86,6 +87,25 @@ def normalize_event(entry, doorbells: list[dict], network_id: str = "",
             "timestamp": timestamp, "verified": True}
 
 
+async def request_event_media(blink, time: float, page: int) -> dict:
+    """La v2 inclut les alertes sans vidéo (type=event), même sans abonnement.
+
+    La v1 de blinkpy n'inventorie que les médias enregistrés. Garder ce repli
+    pour les anciens comptes, mais ne pas l'utiliser si la v2 répond vide.
+    Windows peut appliquer son fuseau local au strftime(gmtime, "%z") de
+    blinkpy : dater explicitement en UTC évite une fenêtre située dans le futur.
+    """
+    since = dt.datetime.fromtimestamp(time, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    query = urlencode({"since": since, "page": page})
+    for version in (2, 1):
+        url = (f"{blink.urls.base_url}/api/v{version}/accounts/{blink.account_id}"
+               f"/media/changed?{query}")
+        response = await api.http_get(blink, url)
+        if isinstance(response, dict) and isinstance(response.get("media"), list):
+            return response
+    raise RuntimeError("Inventaire des événements média indisponible")
+
+
 async def poll(blink) -> list[dict]:
     await blink.get_homescreen()
     home = getattr(blink, "homescreen", None) or {}
@@ -110,10 +130,11 @@ async def poll(blink) -> list[dict]:
         except Exception as error:
             errors.append(error)
     # Certains comptes ne publient plus le vieux flux /events/network. Les
-    # médias sont un repli explicite, sans transformer une vidéo live en alerte.
+    # événements/médias v2 sont un repli explicite : les alertes sans vidéo
+    # existent aussi, sans transformer une vidéo live en alerte.
     try:
         for page in range(1, 5):
-            response = await api.request_videos(
+            response = await request_event_media(
                 blink, time=now - EVENT_MAX_AGE_SECONDS, page=page)
             entries = response.get("media") if isinstance(response, dict) else None
             if not isinstance(entries, list):

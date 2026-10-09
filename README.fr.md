@@ -88,12 +88,16 @@ en rouge) : un clic pour commencer à sauvegarder le direct dans `Blink_Direct`,
 un clic pour arrêter. Les enregistrements apparaissent dans Directs
 Enregistrements, consultables et filtrables exactement comme les clips de
 détection.
+Les enregistrements du direct contiennent actuellement la vidéo sans l'audio.
 
 Activez l'enregistrement automatique de sonnette dans Réglages → Alertes.
-Les événements disponibles et leur délai dépendent de Blink et du compte ou
-stockage utilisé. Un module occupé peut retarder ou empêcher l'enregistrement :
-l'historique garde alors son erreur. Les anciennes entrées déduites des relevés
-de caméra sont conservées comme non confirmées et ne déclenchent plus d'alertes.
+Les alertes de mouvement et de bouton sont lues dans l'historique v2 de Blink,
+y compris sans vidéo cloud ni abonnement. Gardez l'application en marche :
+chaque nouvelle alerte peut déclencher un enregistrement du direct sur le PC.
+Le délai de lecture et la disponibilité de la caméra ou du module peuvent
+retarder ou empêcher l'enregistrement : l'historique garde alors son erreur.
+Un ancien événement sans clip Blink ne permet pas de recréer la scène passée.
+Les anciennes entrées déduites des relevés de caméra sont conservées comme non confirmées et ne déclenchent plus d'alertes.
 
 ![L'onglet Clips](Screenshots/serve0.fr.PNG)
 

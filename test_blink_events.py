@@ -59,7 +59,7 @@ class EventPollingTests(unittest.IsolatedAsyncioTestCase):
         blink = SimpleNamespace(homescreen=home or {"doorbells": [DOORBELL]},
                                 get_homescreen=mock.AsyncMock())
         with mock.patch.object(blink_events.api, "request_sync_events", new=mock.AsyncMock(return_value=network)), \
-             mock.patch.object(blink_events.api, "request_videos", new=mock.AsyncMock(side_effect=[media, {"media": []}])), \
+             mock.patch.object(blink_events, "request_event_media", new=mock.AsyncMock(side_effect=[media, {"media": []}])), \
              mock.patch.object(blink_events.time, "time", return_value=NOW.timestamp()):
             return await blink_events.poll(blink)
 

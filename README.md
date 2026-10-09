@@ -79,10 +79,14 @@ old they are.
 The Record button, mid-recording ("Stop recording", in red): one click to start
 saving the current stream to `Blink_Direct`, one to stop. Recordings appear
 under Live Recordings, browsable and filterable exactly like detection clips.
+Live recordings currently contain video without audio.
 
-Enable doorbell auto-recording in Settings → Alerts. Available event records
-and polling latency depend on Blink and the account/storage setup. A busy
-module can delay or prevent recording; the event retains its error in History.
+Enable doorbell auto-recording in Settings → Alerts. Motion and button alerts
+are read from Blink's v2 event history, including events without a cloud video
+or subscription. Keep the application running: each new alert can start a live
+recording saved on the PC. Polling latency and camera/module availability can
+delay or prevent recording; the event retains its error in History. Old events
+without a Blink clip cannot recreate footage of what already happened.
 Older history entries created from camera status timestamps are retained as
 unverified entries and do not trigger new alerts.
 
