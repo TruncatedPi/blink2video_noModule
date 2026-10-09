@@ -428,17 +428,61 @@ def _doorbell_record_loop() -> None:
             if not (settings["doorbell_alerts_enabled"] and settings["doorbell_auto_record"]):
                 _mettre_a_jour_enregistrement_evenement(event["id"], recording_status="cancelled")
                 continue
-            handler = _EnregistreurSonnette(event)
-            handler.send_live_mse(event["camera_key"], uuid.uuid4().hex,
-                                  enregistrer=True, duree_enregistrement=seconds,
-                                  attente_module=30)
-            path = getattr(handler, "enregistrement_cree", None)
-            error = handler.error or getattr(handler, "enregistrement_erreur", "")
-            if error or path is None or not md.valid_mp4(path):
-                raise RuntimeError(error or "Aucune vidéo reçue")
-            _mettre_a_jour_enregistrement_evenement(
-                event["id"], recording_status="recorded",
-                recording_path=path.relative_to(DOSSIER_DIRECT).as_posix())
+
+            # Délai de stabilisation caméra (PIR / alerte cloud) :
+            # Laisser à la sonnette ~2,5s depuis l'événement pour terminer son
+            # paquet d'alerte vers Blink avant d'initier le direct, évitant
+            # un rejet « Live view failed » si le serveur réagit en moins d'une seconde.
+            try:
+                event_epoch = dt.datetime.fromisoformat(event["timestamp"]).timestamp()
+            except Exception:
+                event_epoch = event.get("created_at") or time.time()
+            reste_attente = 2.5 - (time.time() - event_epoch)
+            if 0 < reste_attente <= 2.5:
+                if DOORBELL_MONITOR_STOP.wait(reste_attente):
+                    _mettre_a_jour_enregistrement_evenement(event["id"], recording_status="cancelled")
+                    continue
+
+            max_tentatives = 2
+            dernier_erreur = ""
+            for tentative in range(1, max_tentatives + 1):
+                if DOORBELL_MONITOR_STOP.is_set():
+                    _mettre_a_jour_enregistrement_evenement(event["id"], recording_status="cancelled")
+                    break
+                settings = runtime.lire_reglages()
+                if not (settings["doorbell_alerts_enabled"] and settings["doorbell_auto_record"]):
+                    _mettre_a_jour_enregistrement_evenement(event["id"], recording_status="cancelled")
+                    break
+
+                if tentative > 1:
+                    _journal_direct(
+                        event.get("camera", "sonnette"),
+                        f"nouvelle tentative d'enregistrement ({tentative}/{max_tentatives}) après échec"
+                    )
+                    # Pause pour laisser Blink libérer le verrou de commande
+                    if DOORBELL_MONITOR_STOP.wait(2.5):
+                        _mettre_a_jour_enregistrement_evenement(event["id"], recording_status="cancelled")
+                        break
+
+                handler = _EnregistreurSonnette(event)
+                handler.send_live_mse(event["camera_key"], uuid.uuid4().hex,
+                                      enregistrer=True, duree_enregistrement=seconds,
+                                      attente_module=30)
+                path = getattr(handler, "enregistrement_cree", None)
+                est_valide = isinstance(path, (Path, str)) and md.valid_mp4(path)
+                error = handler.error or getattr(handler, "enregistrement_erreur", "")
+                if not error and est_valide:
+                    _mettre_a_jour_enregistrement_evenement(
+                        event["id"], recording_status="recorded",
+                        recording_path=path.relative_to(DOSSIER_DIRECT).as_posix())
+                    break
+                elif est_valide:
+                    # Des fragments valides ont été sauvés avant l'interruption : conserver le fichier
+                    raise RuntimeError(error or "Vidéo incomplète")
+                else:
+                    dernier_erreur = error or getattr(handler, "enregistrement_erreur", "") or "Aucune vidéo reçue"
+                    if tentative == max_tentatives:
+                        raise RuntimeError(dernier_erreur)
         except Exception as error:
             _mettre_a_jour_enregistrement_evenement(
                 event["id"], recording_status="failed", recording_error=str(error))
@@ -1225,6 +1269,7 @@ def collect(paths: dict, timezone: ZoneInfo, ffmpeg: str = "",
             "cameraKey": blink_registre.camera_setting_key_from_entry(entry),
             "day": local.date().isoformat(),
             "time": local.strftime("%H:%M:%S"),
+            "created_at": created.isoformat(),
             "excluded": excluded,
             "source": source,
             "origine": ETIQUETTES_SOURCE.get(str(entry.get("source") or "usb"),
@@ -1280,6 +1325,7 @@ def collect(paths: dict, timezone: ZoneInfo, ffmpeg: str = "",
                     "cameraKey": safe_file(camera_dir.name),
                     "day": local.date().isoformat(),
                     "time": local.strftime("%H:%M:%S"),
+                    "created_at": created.isoformat(),
                     "excluded": identity in exclusion_directe,
                     "source": "direct",
                     "origine": "Direct",

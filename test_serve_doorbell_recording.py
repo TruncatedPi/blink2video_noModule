@@ -238,6 +238,47 @@ class DoorbellRecordingTests(unittest.TestCase):
         self.assertEqual(duration, 30)
         self.assertEqual(serve.DOORBELL_EVENTS[0]["recording_status"], "pending")
 
+    def test_enregistrement_reussit_a_la_deuxieme_tentative_apres_erreur_initiale(self):
+        """Si la caméra signale Live view failed au premier essai, la 2e tentative réussit."""
+        serve._publier_evenements_sonnette([self.event], self.settings)
+        video_path = self.root / "clip.mp4"
+        video_path.write_bytes(_segment_synthetique() + _fragment(1))
+
+        handler1 = mock.Mock(error="Live view failed", enregistrement_cree=None, enregistrement_erreur="")
+        handler2 = mock.Mock(error="", enregistrement_cree=video_path, enregistrement_erreur="")
+
+        with mock.patch.object(serve, "_EnregistreurSonnette", side_effect=[handler1, handler2]), \
+             mock.patch.object(self.stop, "wait", return_value=False):
+            serve._doorbell_record_loop()
+
+        event = serve.DOORBELL_EVENTS[0]
+        self.assertEqual(event["recording_status"], "recorded")
+        self.assertEqual(event["recording_path"], "clip.mp4")
+
+    def test_collect_inclut_created_at_iso_utc(self):
+        """collect() inclut le champ created_at au format ISO 8601 UTC."""
+        from zoneinfo import ZoneInfo
+        direct_dir = self.root / "Porte" / "2026-10"
+        direct_dir.mkdir(parents=True, exist_ok=True)
+        video = direct_dir / "2026-10-09_19-19-14Z_Porte_12345_abcdef123456.mp4"
+        video.write_bytes(_segment_synthetique() + _fragment(1))
+
+        paths = {
+            "direct": self.root,
+            "thumbs": self.root,
+            "normalized": self.root,
+            "input": self.root,
+            "excluded": self.root,
+        }
+        with mock.patch.object(serve, "probe_duration_cached", return_value=12.5):
+            res = serve.collect(paths, ZoneInfo("America/Los_Angeles"))
+        self.assertEqual(len(res["clips"]), 1)
+        clip = res["clips"][0]
+        self.assertEqual(clip["time"], "12:19:14")
+        self.assertEqual(clip["day"], "2026-10-09")
+        self.assertIn("created_at", clip)
+        self.assertTrue(clip["created_at"].startswith("2026-10-09T19:19:14"))
+
 
 if __name__ == "__main__":
     unittest.main()

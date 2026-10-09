@@ -62,6 +62,52 @@ WINDOWS7_BUILD_MARKER = "windows7-build.txt"
 ENTREE = "blink2video"
 
 
+def detect_system_timezone() -> str:
+    """Détecte le fuseau horaire IANA du système local."""
+    env_tz = os.environ.get("TZ")
+    if env_tz:
+        try:
+            from zoneinfo import ZoneInfo
+            ZoneInfo(env_tz)
+            return env_tz
+        except Exception:
+            pass
+
+    if sys.platform == "win32":
+        try:
+            import winreg
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SYSTEM\CurrentControlSet\Control\TimeZoneInformation",
+            ) as k:
+                win_tz = str(winreg.QueryValueEx(k, "TimeZoneKeyName")[0] or "").strip()
+            win_map = {
+                "Pacific Standard Time": "America/Los_Angeles",
+                "Mountain Standard Time": "America/Denver",
+                "Central Standard Time": "America/Chicago",
+                "Eastern Standard Time": "America/New_York",
+                "US Mountain Standard Time": "America/Phoenix",
+                "Alaskan Standard Time": "America/Anchorage",
+                "Hawaiian Standard Time": "Pacific/Honolulu",
+                "Romance Standard Time": "Europe/Paris",
+                "W. Europe Standard Time": "Europe/Berlin",
+                "GMT Standard Time": "Europe/London",
+                "Greenwich Standard Time": "GMT",
+                "UTC": "UTC",
+                "Tokyo Standard Time": "Asia/Tokyo",
+                "China Standard Time": "Asia/Shanghai",
+                "AUS Eastern Standard Time": "Australia/Sydney",
+            }
+            if win_tz in win_map:
+                return win_map[win_tz]
+        except Exception:
+            pass
+
+    if sys.platform == "win32" and "Pacific" in time.tzname[0]:
+        return "America/Los_Angeles"
+    return "Europe/Paris"
+
+
 # La configuration recommandée, en un seul endroit : « start » la lance,
 # « autostart on » la planifie. Chaque activité a sa cadence, parce qu'elles
 # n'ont pas le même coût : l'inventaire cloud est un appel de 0,13 s au compte,
@@ -69,7 +115,7 @@ ENTREE = "blink2video"
 # rien quand rien n'a changé. Verbeux à lire, jamais à taper.
 REGLAGES = "blink_reglages.json"
 REGLAGES_DEFAUT = {"usb_minutes": 10, "cloud_minutes": 1, "port": 8765, "timestamp": False,
-                   "timezone": "Europe/Paris", "merge_jour": True, "merge_semaine": False,
+                   "timezone": detect_system_timezone(), "merge_jour": True, "merge_semaine": False,
                    "merge_mois": False, "download_auto": True, "live_protocol": "webrtc",
                    "font_size": None, "font_color": "white", "box_opacity": 0.55,
                    "trusted_host": "", "webhook_notif_url": "",
@@ -166,6 +212,15 @@ def _flottant_borne(valeurs: dict, champ: str, defaut: float,
     return nombre
 
 
+def _fuseau_reglages(valeurs: dict) -> str:
+    """Détermine le fuseau horaire en migrant l'ancien défaut figé vers le système."""
+    tz = str(valeurs.get("timezone", "") or "").strip()
+    sys_tz = detect_system_timezone()
+    if not tz or (tz == "Europe/Paris" and sys_tz != "Europe/Paris"):
+        return sys_tz
+    return tz
+
+
 def lire_reglages() -> dict:
     """Cadences USB/cloud, port, horodatage et fuseau actuels, modifiables
     depuis la page web.
@@ -189,8 +244,7 @@ def lire_reglages() -> dict:
                                        REGLAGES_DEFAUT["cloud_minutes"], 1),
         "port": _entier_borne(valeurs, "port", REGLAGES_DEFAUT["port"], 1, 65535),
         "timestamp": _booleen(valeurs, "timestamp", REGLAGES_DEFAUT["timestamp"]),
-        "timezone": str(valeurs.get("timezone", REGLAGES_DEFAUT["timezone"])) or
-        REGLAGES_DEFAUT["timezone"],
+        "timezone": _fuseau_reglages(valeurs),
         "merge_jour": _booleen(valeurs, "merge_jour", REGLAGES_DEFAUT["merge_jour"]),
         "merge_semaine": _booleen(valeurs, "merge_semaine", REGLAGES_DEFAUT["merge_semaine"]),
         "merge_mois": _booleen(valeurs, "merge_mois", REGLAGES_DEFAUT["merge_mois"]),

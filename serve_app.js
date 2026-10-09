@@ -2696,8 +2696,20 @@ function preparerLecteursClips() {
 }
 
 function card(c) {
-  const [an, mois, jour] = c.day.split("-");
-  const ligne = [c.camera, duration(c.duration), `${jour}/${mois}/${an}`, c.time,
+  let displayDay = c.day;
+  let displayTime = c.time;
+  if (c.created_at) {
+    try {
+      const dt = new Date(c.created_at);
+      if (!isNaN(dt.getTime())) {
+        const pad = (n) => String(n).padStart(2, "0");
+        displayDay = `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+        displayTime = `${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
+      }
+    } catch (_) {}
+  }
+  const [an, mois, jour] = (displayDay || "").split("-");
+  const ligne = [c.camera, duration(c.duration), (jour && mois && an) ? `${jour}/${mois}/${an}` : displayDay, displayTime,
                  c.model].filter(Boolean).join(" · ");
   // c.kind ("clip" ou "direct") choisit le préfixe d'URL : resolve_media()
   // (serve.py) route chacun vers sa propre racine disque, mêmes routes

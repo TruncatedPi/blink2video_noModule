@@ -63,7 +63,7 @@ def normalize_event(entry, doorbells: list[dict], network_id: str = "",
         return None
     now = time.time() if now is None else now
     age = now - instant.timestamp()
-    if age < -10 or age > EVENT_MAX_AGE_SECONDS:
+    if age < -60 or age > EVENT_MAX_AGE_SECONDS:
         return None
     nid = str(entry.get("network_id") or network_id or "")
     cid = str(entry.get("device_id") or entry.get("camera_id") or "")
