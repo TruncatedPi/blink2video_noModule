@@ -464,6 +464,13 @@ def _doorbell_record_loop() -> None:
                         _mettre_a_jour_enregistrement_evenement(event["id"], recording_status="cancelled")
                         break
 
+                settings = runtime.lire_reglages()
+                if DOORBELL_MONITOR_STOP.is_set() or not (
+                    settings["doorbell_alerts_enabled"] and settings["doorbell_auto_record"]
+                ):
+                    _mettre_a_jour_enregistrement_evenement(event["id"], recording_status="cancelled")
+                    break
+
                 handler = _EnregistreurSonnette(event)
                 handler.send_live_mse(event["camera_key"], uuid.uuid4().hex,
                                       enregistrer=True, duree_enregistrement=seconds,
@@ -2312,8 +2319,15 @@ def _preparer_reglages_web(payload: dict) -> tuple[str, dict]:
             "direct).") from erreur
     reglages["live_auto_stop_seconds"] = live_auto_stop_seconds
 
-    # Doorbell alerts and recording settings (Feature 1)
     current = runtime.lire_reglages()
+    for field, choices in (("date_format", runtime.FORMATS_DATE_VALIDES),
+                           ("time_format", runtime.FORMATS_HEURE_VALIDES)):
+        value = payload.get(field, current[field])
+        if value not in choices:
+            raise _ReglagesInvalides(f"{field} : format inconnu")
+        reglages[field] = value
+
+    # Doorbell alerts and recording settings (Feature 1)
     for field in ("doorbell_alerts_enabled", "doorbell_auto_record", "doorbell_chime_enabled"):
         value = payload.get(field, current[field])
         if not isinstance(value, bool):
@@ -4029,7 +4043,11 @@ class Handler(serveweb.Handler):
             self.send_error(403)
             return
         if route == "/":
-            body = PAGE.encode("utf-8")
+            settings = runtime.lire_reglages()
+            date_settings = {field: settings[field] for field in ("date_format", "time_format")}
+            date_settings["timezone"] = self.timezone.key
+            body = PAGE.replace("__DATE_TIME_SETTINGS__",
+                                json.dumps(date_settings).replace("<", r"\u003c")).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             # La page est intégrée au script : elle change dès qu'on modifie
@@ -5372,6 +5390,49 @@ __CSS__
              placeholder="C:/chemin/vers/le/dossier">
       <button type="button" id="storageDirBrowse" data-i18n="reglages.storageDir.browse">Parcourir…</button>
     </div>
+    <fieldset>
+      <legend data-i18n="reglages.dateTime">Date et heure</legend>
+      <div class="champCadence">
+        <label for="timezone" data-i18n="reglages.timezone">Fuseau horaire</label>
+        <input type="text" id="timezone" list="fuseauxCourants" placeholder="UTC">
+      </div>
+      <button type="button" id="timezonePacific" data-i18n="reglages.timezone.pacificFixed">Pacifique UTC−07:00 (sans changement d'heure)</button>
+      <p class="sub tiny" data-i18n="reglages.timezone.hint">Ce fuseau s'applique aux événements, vidéos, photos et regroupements. Pacifique fixe reste à UTC−07:00 toute l'année.</p>
+      <datalist id="fuseauxCourants">
+        <option value="Etc/GMT+7" data-i18n="reglages.timezone.pacificFixed">Pacifique UTC−07:00 (sans changement d'heure)</option>
+        <option value="Europe/Paris">
+        <option value="Europe/London">
+        <option value="Europe/Brussels">
+        <option value="Europe/Madrid">
+        <option value="Europe/Berlin">
+        <option value="America/Montreal">
+        <option value="America/New_York">
+        <option value="America/Chicago">
+        <option value="America/Denver">
+        <option value="America/Los_Angeles">
+        <option value="Africa/Casablanca">
+        <option value="Africa/Abidjan">
+        <option value="Indian/Reunion">
+        <option value="Asia/Tokyo">
+        <option value="Australia/Sydney">
+        <option value="UTC">
+      </datalist>
+      <div class="champCadence">
+        <label for="dateFormat" data-i18n="reglages.dateFormat">Format de date</label>
+        <select id="dateFormat">
+          <option value="iso" data-i18n="reglages.dateFormat.iso">AAAA-MM-JJ (2026-10-09)</option>
+          <option value="mdy" data-i18n="reglages.dateFormat.mdy">MM/JJ/AAAA (10/09/2026)</option>
+          <option value="dmy" data-i18n="reglages.dateFormat.dmy">JJ/MM/AAAA (09/10/2026)</option>
+        </select>
+      </div>
+      <div class="champCadence">
+        <label for="timeFormat" data-i18n="reglages.timeFormat">Format d'heure</label>
+        <select id="timeFormat">
+          <option value="24h" data-i18n="reglages.timeFormat.24h">24 heures (15:04:05)</option>
+          <option value="12h" data-i18n="reglages.timeFormat.12h">12 heures (3:04:05 PM)</option>
+        </select>
+      </div>
+    </fieldset>
   </div>
   <div id="panelVideo" class="panelReglages" hidden>
     <fieldset>
@@ -5417,28 +5478,6 @@ __CSS__
         <option value="lime">
         <option value="cyan">
         <option value="orange">
-      </datalist>
-      <div class="champCadence">
-        <label for="timezone" data-i18n="reglages.timezone">Fuseau horaire</label>
-        <input type="text" id="timezone" list="fuseauxCourants" placeholder="Europe/Paris">
-      </div>
-      <datalist id="fuseauxCourants">
-        <option value="Europe/Paris">
-        <option value="Europe/London">
-        <option value="Europe/Brussels">
-        <option value="Europe/Madrid">
-        <option value="Europe/Berlin">
-        <option value="America/Montreal">
-        <option value="America/New_York">
-        <option value="America/Chicago">
-        <option value="America/Denver">
-        <option value="America/Los_Angeles">
-        <option value="Africa/Casablanca">
-        <option value="Africa/Abidjan">
-        <option value="Indian/Reunion">
-        <option value="Asia/Tokyo">
-        <option value="Australia/Sydney">
-        <option value="UTC">
       </datalist>
       <div class="champCadence">
         <label for="liveProtocol" data-i18n="reglages.liveProtocol">Protocole du direct</label>
@@ -5642,7 +5681,14 @@ PAGE = PAGE.replace(
 # impossible d'en faire une f-string. Une substitution unique au chargement
 # suffit, et laisse le gabarit lisible.
 VERSION_AFFICHEE = runtime.version_affichee()
-PAGE = PAGE.replace("__VERSION__", VERSION_AFFICHEE)
+version_page = VERSION_AFFICHEE
+date_commit = runtime.git_commit_timestamp()
+if date_commit:
+    version_page = re.sub(
+        r"\((\d{4}-\d{2}-\d{2} \d{2}:\d{2})\)",
+        lambda m: f'(<time id="versionTimestamp" datetime="{date_commit}">{m.group(1)}</time>)',
+        version_page, count=1)
+PAGE = PAGE.replace("__VERSION__", version_page)
 # Le PID à côté de la version distingue en un coup d'œil un onglet resté
 # ouvert sur l'ancien processus de celui qui vient de repartir après un
 # redémarrage : les deux affichent la même page tant que l'onglet ne

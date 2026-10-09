@@ -62,6 +62,7 @@ globalThis.setTimeout = (fonction, delai) => {
 globalThis.clearTimeout = (id) => { temporisations.delete(id); };
 const elements = Object.fromEntries(Object.entries({
   usbMinutes: '5', cloudMinutes: '15', port: '5000', timezone: 'Europe/Paris',
+  dateFormat: 'mdy', timeFormat: '12h',
   storageDir: ' clips ', liveProtocol: 'mse',
   fontSize: '', fontColor: 'white', boxOpacity: '0.55',
   trustedHost: '100.101.194.5', webhookNotifUrl: 'https://exemple.invalid/notif',
@@ -233,6 +234,7 @@ function instantane() {
         self.assertEqual(json.loads(post["options"]["body"]), {
             "usb_minutes": 3, "cloud_minutes": 12, "port": 5000,
             "storage_dir": "C:\\Mes vidéos\\", "timezone": "Europe/Paris",
+            "date_format": "mdy", "time_format": "12h",
             "timestamp": True, "live_protocol": "mse", "merge_jour": True,
             "merge_semaine": False, "merge_mois": True, "download_auto": False,
             "font_size": None, "font_color": "white", "box_opacity": 0.55,

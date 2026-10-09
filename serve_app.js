@@ -58,6 +58,60 @@ let videos = { daily: [], weekly: [], monthly: [] };
 let snapshots = [];
 const $ = (id) => document.getElementById(id);
 
+
+// Un seul fuseau et les mêmes formats dans chaque vue. Les dates ISO et noms
+// UTC sur disque restent des identifiants ; seul leur affichage est réglable.
+const AFFICHAGE_DATES = __DATE_TIME_SETTINGS__;
+const FORMAT_INSTANT = new Intl.DateTimeFormat("en-CA-u-nu-latn", {
+  timeZone: AFFICHAGE_DATES.timezone, calendar: "gregory", hourCycle: "h23",
+  year: "numeric", month: "2-digit", day: "2-digit",
+  hour: "2-digit", minute: "2-digit", second: "2-digit",
+});
+
+function partiesInstant(instant) {
+  if (!instant) return null;
+  const date = new Date(instant);
+  if (isNaN(date.getTime())) return null;
+  return Object.fromEntries(FORMAT_INSTANT.formatToParts(date)
+    .filter((p) => p.type !== "literal").map((p) => [p.type, p.value]));
+}
+
+function dateLocale(jour) {
+  const m = (jour || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return jour || "";
+  if (AFFICHAGE_DATES.date_format === "mdy") return `${m[2]}/${m[3]}/${m[1]}`;
+  if (AFFICHAGE_DATES.date_format === "dmy") return `${m[3]}/${m[2]}/${m[1]}`;
+  return jour;
+}
+
+function heureLocale(heure, secondes = true) {
+  const m = (heure || "").match(/^(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!m) return heure || "";
+  const suffixe = secondes && m[3] ? `:${m[3]}` : "";
+  if (AFFICHAGE_DATES.time_format === "12h") {
+    const h = Number(m[1]);
+    return `${h % 12 || 12}:${m[2]}${suffixe} ${h < 12 ? "AM" : "PM"}`;
+  }
+  return `${m[1]}:${m[2]}${suffixe}`;
+}
+
+function heureInstant(instant, secondes = true) {
+  const p = partiesInstant(instant);
+  return p ? heureLocale(`${p.hour}:${p.minute}:${p.second}`, secondes) : "";
+}
+
+function dateHeure(instant, secondes = true) {
+  const p = partiesInstant(instant);
+  return p ? `${dateLocale(`${p.year}-${p.month}-${p.day}`)} ${heureLocale(`${p.hour}:${p.minute}:${p.second}`, secondes)}` : "";
+}
+
+// Valeur d'un datetime-local : déjà dans le fuseau de l'application, sans
+// conversion par le fuseau du navigateur (le serveur la lit de la même façon).
+function dateHeureLocale(valeur) {
+  const m = (valeur || "").match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}(?::\d{2})?)$/);
+  return m ? `${dateLocale(m[1])} ${heureLocale(m[2])}` : "";
+}
+
 // ── i18n ─────────────────────────────────────────────────────────────────
 // Même pattern que gui/app.js de lidar2map : dico inline par locale + attribut
 // data-i18n sur les nœuds statiques, t()/tf() appelés directement dans le
@@ -117,6 +171,16 @@ const I18N = {
     "reglages.fontSize": "Taille de police", "reglages.fontColor": "Couleur",
     "reglages.boxOpacity": "Opacité du bandeau",
     "reglages.timezone": "Fuseau horaire",
+    "reglages.dateTime": "Date et heure",
+    "reglages.dateFormat": "Format de date",
+    "reglages.dateFormat.iso": "AAAA-MM-JJ (2026-10-09)",
+    "reglages.dateFormat.mdy": "MM/JJ/AAAA (10/09/2026)",
+    "reglages.dateFormat.dmy": "JJ/MM/AAAA (09/10/2026)",
+    "reglages.timeFormat": "Format d'heure",
+    "reglages.timeFormat.24h": "24 heures (15:04:05)",
+    "reglages.timeFormat.12h": "12 heures (3:04:05 PM)",
+    "reglages.timezone.pacificFixed": "Pacifique UTC−07:00 (sans changement d'heure)",
+    "reglages.timezone.hint": "Ce fuseau s'applique aux événements, vidéos, photos et regroupements. Pacifique fixe reste à UTC−07:00 toute l'année.",
     "reglages.liveProtocol": "Protocole du direct",
     "reglages.liveProtocol.webrtc": "WebRTC (rapide)",
     "reglages.liveProtocol.mse": "MSE (compatible)",
@@ -343,6 +407,16 @@ const I18N = {
     "reglages.fontSize": "Font size", "reglages.fontColor": "Color",
     "reglages.boxOpacity": "Box opacity",
     "reglages.timezone": "Time zone",
+    "reglages.dateTime": "Date and time",
+    "reglages.dateFormat": "Date format",
+    "reglages.dateFormat.iso": "YYYY-MM-DD (2026-10-09)",
+    "reglages.dateFormat.mdy": "MM/DD/YYYY (10/09/2026)",
+    "reglages.dateFormat.dmy": "DD/MM/YYYY (09/10/2026)",
+    "reglages.timeFormat": "Time format",
+    "reglages.timeFormat.24h": "24 hours (15:04:05)",
+    "reglages.timeFormat.12h": "12 hours (3:04:05 PM)",
+    "reglages.timezone.pacificFixed": "Pacific UTC−07:00 (no DST)",
+    "reglages.timezone.hint": "This time zone applies to events, videos, pictures and day grouping. Fixed Pacific stays at UTC−07:00 all year.",
     "reglages.liveProtocol": "Live view protocol",
     "reglages.liveProtocol.webrtc": "WebRTC (fast)",
     "reglages.liveProtocol.mse": "MSE (compatible)",
@@ -1090,7 +1164,7 @@ async function heuresDePassage() {
     ? tf(arrives > 1 ? "passages.new.many" : "passages.new.one", { n: arrives })
     : "";
   $("passages").textContent =
-    tf("passages.updated", { heure: vus[plusRecent].slice(11, 16) }) + nouveaux;
+    tf("passages.updated", { heure: heureInstant(vus[plusRecent], false) }) + nouveaux;
 }
 
 async function etatDuTravail() {
@@ -1164,18 +1238,14 @@ function actualiserVignettes() {
   }
 }
 
-// Un relevé de caméra arrive daté (ISO, à la minute, à l'heure du serveur),
-// avec « est-ce aujourd'hui ? » : la page compose le texte dans sa langue et
-// au format de date du navigateur, comme dateLocale() et dateSnapshot(). Le
-// serveur envoyait « 28/09 à 14:30 », français en dur (issue #37), et la page
-// devinait la phrase à prendre en cherchant ce « à » dedans.
+// La mesure porte un instant avec décalage ; le fuseau d'affichage est celui
+// de l'application, comme pour les événements et les vidéos.
 function dateReleve(c, locale) {
-  const m = (c.measured_at || "").match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
-  if (!m) return null;
-  const heure = `${m[4]}:${m[5]}`;
+  const p = partiesInstant(c.measured_at);
+  if (!p) return null;
+  const heure = heureInstant(c.measured_at, false);
   if (c.measured_today) return tf("camera.measured.at", { v: heure });
-  const jour = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).toLocaleDateString(
-    locale, { day: "2-digit", month: "2-digit", timeZone: "UTC" });
+  const jour = dateLocale(`${p.year}-${p.month}-${p.day}`);
   return tf("camera.measured.on", { d: jour, h: heure });
 }
 
@@ -2482,7 +2552,7 @@ function renderClips() {
   const navigation = navigationClips(clips.length, pages);
   const days = [...new Set(tranche.map((c) => c.day))];
   $("list").innerHTML = (barrePaginationHaute ? navigation : "") + days.map((day) => `
-    <h2>${h(day)}</h2>
+    <h2>${h(dateLocale(day))}</h2>
     <div class="grid">${tranche.filter((c) => c.day === day).map(card).join("")}</div>
   `).join("") + navigation;
   preparerLecteursClips();
@@ -2548,16 +2618,7 @@ function renderVideos(kind) {
 function dateSnapshot(horodatage) {
   const m = horodatage.match(/^(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})Z_/);
   if (!m) return horodatage;
-  return new Date(`${m[1]}T${m[2]}:${m[3]}:${m[4]}Z`).toLocaleString();
-}
-
-// label d'une journaliere est AAAA-MM-JJ (voir renderVideos) : sans heure,
-// interpreter en UTC minuit puis reformater en date locale evite qu'un
-// fuseau a l'ouest de UTC ne fasse glisser l'affichage sur la veille.
-function dateLocale(jour) {
-  const m = jour.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!m) return jour;
-  return new Date(`${jour}T00:00:00Z`).toLocaleDateString(undefined, { timeZone: "UTC" });
+  return dateHeure(`${m[1]}T${m[2]}:${m[3]}:${m[4]}Z`);
 }
 
 function renderPictures() {
@@ -2602,7 +2663,7 @@ function videoCard(v, parJour = false) {
            poster="${h(poster)}" src="${h(media)}"></video>
     <div class="meta">
       <div>
-        <div class="time">${h(parJour ? v.camera : v.label)}</div>
+        <div class="time">${h(parJour ? v.camera : dateLocale(v.label))}</div>
         <div class="sub">${h(duration(v.duration))}</div>
       </div>
       <a class="act" href="${h(media)}" download>${h(t("videos.download"))}</a>
@@ -2696,20 +2757,9 @@ function preparerLecteursClips() {
 }
 
 function card(c) {
-  let displayDay = c.day;
-  let displayTime = c.time;
-  if (c.created_at) {
-    try {
-      const dt = new Date(c.created_at);
-      if (!isNaN(dt.getTime())) {
-        const pad = (n) => String(n).padStart(2, "0");
-        displayDay = `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
-        displayTime = `${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
-      }
-    } catch (_) {}
-  }
-  const [an, mois, jour] = (displayDay || "").split("-");
-  const ligne = [c.camera, duration(c.duration), (jour && mois && an) ? `${jour}/${mois}/${an}` : displayDay, displayTime,
+  const horodatage = dateHeure(c.created_at)
+    || [dateLocale(c.day), heureLocale(c.time)].filter(Boolean).join(" ");
+  const ligne = [c.camera, duration(c.duration), horodatage,
                  c.model].filter(Boolean).join(" · ");
   // c.kind ("clip" ou "direct") choisit le préfixe d'URL : resolve_media()
   // (serve.py) route chacun vers sa propre racine disque, mêmes routes
@@ -2896,14 +2946,8 @@ async function appliquerFiltre() {
 // une période précise qu'on l'a choisie, autant la voir sans rouvrir le
 // panneau.
 function libellePlagePersonnalisee() {
-  const formater = (v) => {
-    if (!v) return null;
-    const [date, heure] = v.split("T");
-    const [, mois, jour] = date.split("-");
-    return `${jour}/${mois} ${heure || "00:00"}`;
-  };
-  const depuis = formater(plageClips.depuis);
-  const jusqua = formater(plageClips.jusqua);
+  const depuis = dateHeureLocale(plageClips.depuis);
+  const jusqua = dateHeureLocale(plageClips.jusqua);
   if (depuis && jusqua) return `${depuis} → ${jusqua}`;
   if (depuis) return tf("range.custom.depuis", { v: depuis });
   if (jusqua) return tf("range.custom.jusqua", { v: jusqua });
@@ -3251,6 +3295,11 @@ $("autostart").onchange = async () => {
   }
 };
 
+const dateVersionEl = $("versionTimestamp");
+if (dateVersionEl) dateVersionEl.textContent = dateHeure(dateVersionEl.dateTime, false);
+
+$("timezonePacific").onclick = () => { $("timezone").value = "Etc/GMT+7"; };
+
 let portActuel = null;   // relu à chaque ouverture, comparé à l'envoi
 
 function afficherFormulaireReglages(reglages) {
@@ -3268,6 +3317,8 @@ function afficherFormulaireReglages(reglages) {
   $("boxOpacity").value = reglages.box_opacity;
   appliquerDependanceTimestamp();
   $("timezone").value = reglages.timezone;
+  $("dateFormat").value = reglages.date_format || "iso";
+  $("timeFormat").value = reglages.time_format || "24h";
   $("liveProtocol").value = reglages.live_protocol;
   $("mergeJour").checked = reglages.merge_jour;
   $("mergeSemaine").checked = reglages.merge_semaine;
@@ -3545,6 +3596,7 @@ async function envoyerFormulaireReglages({ usb, cloud, port, timezone }) {
       webhook_notif_url: $("webhookNotifUrl").value.trim(),
       live_auto_stop_seconds: Number($("liveAutoStopSeconds").value) || 0,
       timestamp: $("timestamp").checked, timezone,
+      date_format: $("dateFormat").value, time_format: $("timeFormat").value,
       live_protocol: $("liveProtocol").value,
       merge_jour: $("mergeJour").checked,
       merge_semaine: $("mergeSemaine").checked,
@@ -3911,7 +3963,7 @@ function montrerBandeauAlerte(evt, serverSettings) {
   }
   const subEl = $("doorbellAlertSubtitle");
   if (subEl) {
-    const timeStr = evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : t("doorbell.justNow");
+    const timeStr = evt.timestamp ? heureInstant(evt.timestamp) : t("doorbell.justNow");
     subEl.textContent = `${evt.camera || "Doorbell"} · ${timeStr}`;
   }
 
@@ -4088,7 +4140,7 @@ async function renderEvents() {
       const isUnack = !evt.acknowledged;
       const isRing = evt.type === "ring";
       const icon = isRing ? "🔔" : evt.type === "motion" ? "🚶" : "⚪";
-      const dateStr = evt.timestamp ? new Date(evt.timestamp).toLocaleString() : "";
+      const dateStr = evt.timestamp ? dateHeure(evt.timestamp) : "";
       const typeLabel = t(isRing ? "events.ring" : evt.type === "motion" ? "events.motion" : "events.unknown");
       const recording = evt.recording_status
         ? `${t("events.recording." + evt.recording_status)}${evt.recording_error ? " · " + evt.recording_error : ""}` : "";

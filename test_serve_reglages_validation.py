@@ -19,7 +19,7 @@ ERREUR_NOMBRES = (
     "moins 1, et le port un nombre entre 1 et 65535.")
 DEFAUTS = {
     "usb_minutes": 5, "cloud_minutes": 10, "port": 8765,
-    "timestamp": False, "timezone": "UTC", "merge_jour": True,
+    "timestamp": False, "timezone": "UTC", "date_format": "iso", "time_format": "24h", "merge_jour": True,
     "merge_semaine": True, "merge_mois": True, "download_auto": True,
     "live_protocol": "webrtc",
     "font_size": None, "font_color": "white", "box_opacity": 0.55,
@@ -37,6 +37,10 @@ CHAMPS_BOOLEENS = (
 
 class TestsValidationReglagesHttp(unittest.TestCase):
     def setUp(self):
+        settings = mock.patch.object(serve.runtime, "lire_reglages",
+                                     return_value=dict(serve.runtime.REGLAGES_DEFAUT))
+        settings.start()
+        self.addCleanup(settings.stop)
         self.observations = []
 
         def remplacer(objet, nom, **options):
@@ -119,7 +123,7 @@ class TestsValidationReglagesHttp(unittest.TestCase):
             merge_mois="", download_auto=[False], live_protocol="mse"))
         self.assert_enregistre(handler, {
             "usb_minutes": 3, "cloud_minutes": 12, "port": 65535,
-            "timestamp": True, "timezone": "UTC", "merge_jour": False,
+            "timestamp": True, "timezone": "UTC", "date_format": "iso", "time_format": "24h", "merge_jour": False,
             "merge_semaine": False, "merge_mois": False,
             "download_auto": True, "live_protocol": "mse",
             "font_size": None, "font_color": "white", "box_opacity": 0.55,

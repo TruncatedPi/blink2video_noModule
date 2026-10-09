@@ -7,6 +7,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from test_serve_app_js_datetime import formatting_source
+
 
 class TestsPaginationClips(unittest.TestCase):
     @classmethod
@@ -26,6 +28,8 @@ class TestsPaginationClips(unittest.TestCase):
         cls.click = re.search(r'^\$\("list"\).addEventListener\("click", .*?^\}\);', source, re.MULTILINE | re.DOTALL).group(0)
         cls.submit = re.search(r'^\$\("list"\).addEventListener\("submit", .*?^\}\);', source, re.MULTILINE | re.DOTALL).group(0)
         cls.change = re.search(r'^\$\("list"\).addEventListener\("change", .*?^\}\);', source, re.MULTILINE | re.DOTALL).group(0)
+
+        cls.code = formatting_source(source) + "\n" + cls.code
 
     def executer(self, actions="", total=1605, stockage=None, stockage_indisponible=False):
         script = """

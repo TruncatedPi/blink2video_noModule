@@ -14,6 +14,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from test_serve_app_js_datetime import formatting_source
+
 RACINE = Path(__file__).parent
 
 
@@ -31,7 +33,8 @@ class TestsReleveEtTemperature(unittest.TestCase):
         if cls.node is None:
             raise unittest.SkipTest("node introuvable")
         source = (RACINE / "serve_app.js").read_text(encoding="utf-8")
-        cls.code = "\n".join([
+        cls.code = formatting_source(source, {"timezone": "Europe/Paris",
+                                              "date_format": "dmy", "time_format": "24h"}) + "\n" + "\n".join([
             extraire(source, r'^const I18N = \{.*?^\};'),
             extraire(source, r'^function t\(k\) \{[^\n]*\}$'),
             extraire(source, r'^function tf\(k, v\) \{.*?^\}'),
@@ -59,13 +62,13 @@ class TestsReleveEtTemperature(unittest.TestCase):
 
     def test_releve_ancien_dit_le_jour_puis_l_heure_dans_la_langue_de_la_page(self):
         self.assertEqual(self.releve("fr", "fr", "2026-09-26T10:05+02:00", False),
-                         "relevé du 26/09 à 10:05")
+                         "relevé du 26/09/2026 à 10:05")
         self.assertEqual(self.releve("en", "en-GB", "2026-09-26T10:05+02:00", False),
-                         "measured on 26/09 at 10:05")
+                         "measured on 26/09/2026 at 10:05")
 
-    def test_le_format_de_date_est_celui_du_navigateur(self):
+    def test_le_format_de_date_suit_le_reglage_et_non_le_navigateur(self):
         self.assertEqual(self.releve("en", "en-US", "2026-09-26T10:05+02:00", False),
-                         "measured on 09/26 at 10:05")
+                         "measured on 26/09/2026 at 10:05")
 
     def test_aucun_mot_francais_sous_une_page_anglaise(self):
         for iso, aujourdhui in (("2026-09-28T14:30+02:00", True),
@@ -78,7 +81,7 @@ class TestsReleveEtTemperature(unittest.TestCase):
         # 23:59 à +02:00 reste le 28 : la page lit la date telle qu'envoyée au
         # lieu de la convertir dans son propre fuseau.
         self.assertEqual(self.releve("fr", "fr", "2026-09-28T23:59+02:00", False),
-                         "relevé du 28/09 à 23:59")
+                         "relevé du 28/09/2026 à 23:59")
 
     def test_sans_releve_ou_date_illisible_rien(self):
         self.assertIsNone(self.executer("fr", "dateReleve({measured_at: null}, 'fr')"))

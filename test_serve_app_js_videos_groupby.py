@@ -11,6 +11,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from test_serve_app_js_datetime import formatting_source
+
 
 class TestsGroupementVideosParJour(unittest.TestCase):
     @classmethod
@@ -20,14 +22,14 @@ class TestsGroupementVideosParJour(unittest.TestCase):
             raise unittest.SkipTest("node introuvable")
         source = (Path(__file__).parent / "serve_app.js").read_text(encoding="utf-8")
         fragments = []
-        for nom in ("duration", "dateLocale", "regroupable", "renderVideos", "videoCard"):
+        for nom in ("duration", "regroupable", "renderVideos", "videoCard"):
             correspondance = re.search(
                 rf"^(?:async )?function {nom}\(.*?^\}}", source, re.DOTALL | re.MULTILINE,
             )
             if correspondance is None:
                 raise AssertionError(f"fonction {nom}() introuvable")
             fragments.append(correspondance.group(0))
-        cls.javascript = "\n".join(fragments)
+        cls.javascript = formatting_source(source) + "\n" + "\n".join(fragments)
 
     def _executer(self, videos_daily: list, group_by: str, camera_filtre: str = "") -> dict:
         script = f"""

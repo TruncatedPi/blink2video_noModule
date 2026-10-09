@@ -7,6 +7,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from test_serve_app_js_datetime import formatting_source
+
 
 class DoorbellBrowserTests(unittest.TestCase):
     @classmethod
@@ -24,6 +26,8 @@ class DoorbellBrowserTests(unittest.TestCase):
         cls.history = source[start:source.index('if ($("btnAlertWatch"))', start)]
         start = source.index('$("view").onchange =')
         cls.change = source[start:source.index('// Seule cette ligne de texte', start)]
+
+        cls.functions = formatting_source(source) + "\n" + cls.functions
 
     def run_js(self, scenario):
         script = r'''

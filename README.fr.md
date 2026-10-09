@@ -115,6 +115,14 @@ Le filtre choisi reste mémorisé d'une visite à l'autre.
 
 ![Le panneau de réglages](Screenshots/settings.fr.PNG)
 
+Les dates et heures partagent les mêmes réglages dans les événements, clips,
+enregistrements du direct, photos, relevés de caméra et groupes par jour. Dans
+**Réglages → Général → Date et heure**, choisissez AAAA-MM-JJ, MM/JJ/AAAA ou
+JJ/MM/AAAA et une horloge de 12 ou 24 heures. **Pacifique UTC−07:00 (sans
+changement d’heure)** conserve ce décalage toute l’année (nom IANA `Etc/GMT+7`).
+Appliquez les réglages pour redémarrer avec le fuseau choisi ; les noms de
+fichiers et instants enregistrés en UTC gardent leur sens d’origine.
+
 Les réglages, derrière l'icône engrenage : démarrage automatique à
 l'ouverture de session, actualisation automatique de la page, port du
 serveur, dossier des vidéos avec un sélecteur natif, et cadence de lecture

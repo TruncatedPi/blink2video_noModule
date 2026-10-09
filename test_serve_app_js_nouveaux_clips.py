@@ -17,6 +17,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from test_serve_app_js_datetime import formatting_source
+
 
 class TestsNouveauxClips(unittest.TestCase):
     @classmethod
@@ -32,6 +34,8 @@ class TestsNouveauxClips(unittest.TestCase):
         if fonction is None:
             raise AssertionError("heuresDePassage() introuvable dans serve_app.js")
         cls.fonction = fonction.group(0)
+
+        cls.fonction = formatting_source(source) + "\n" + cls.fonction
 
     def _executer(self, *, galerie: dict, clips_passages: int, auto: bool) -> dict:
         etat = {"passages": {"download": "2026-09-26T18:05:00Z"},

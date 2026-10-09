@@ -21,6 +21,7 @@ from __future__ import annotations  # Python 3.8 (build Windows 7) : les annotat
 
 import argparse
 import contextlib
+import datetime as dt
 import json
 import os
 import secrets
@@ -81,12 +82,25 @@ def detect_system_timezone() -> str:
                 r"SYSTEM\CurrentControlSet\Control\TimeZoneInformation",
             ) as k:
                 win_tz = str(winreg.QueryValueEx(k, "TimeZoneKeyName")[0] or "").strip()
+                try:
+                    no_dst = bool(winreg.QueryValueEx(k, "DynamicDaylightTimeDisabled")[0])
+                except OSError:
+                    no_dst = False
+            if no_dst:
+                offset = dt.datetime.now().astimezone().utcoffset()
+                hours = offset.total_seconds() / 3600 if offset is not None else None
+                if hours is not None and hours.is_integer():
+                    name = "UTC" if hours == 0 else f"Etc/GMT{-int(hours):+d}"
+                    from zoneinfo import ZoneInfo
+                    ZoneInfo(name)
+                    return name
             win_map = {
                 "Pacific Standard Time": "America/Los_Angeles",
                 "Mountain Standard Time": "America/Denver",
                 "Central Standard Time": "America/Chicago",
                 "Eastern Standard Time": "America/New_York",
                 "US Mountain Standard Time": "America/Phoenix",
+                "Yukon Standard Time": "America/Whitehorse",
                 "Alaskan Standard Time": "America/Anchorage",
                 "Hawaiian Standard Time": "Pacific/Honolulu",
                 "Romance Standard Time": "Europe/Paris",
@@ -105,7 +119,16 @@ def detect_system_timezone() -> str:
 
     if sys.platform == "win32" and "Pacific" in time.tzname[0]:
         return "America/Los_Angeles"
-    return "Europe/Paris"
+    if sys.platform != "win32":
+        try:
+            resolved = str(Path("/etc/localtime").resolve())
+            name = resolved.split("/zoneinfo/", 1)[1]
+            from zoneinfo import ZoneInfo
+            ZoneInfo(name)
+            return name
+        except (OSError, IndexError, ValueError, KeyError):
+            pass
+    return "UTC"
 
 
 # La configuration recommandée, en un seul endroit : « start » la lance,
@@ -115,7 +138,8 @@ def detect_system_timezone() -> str:
 # rien quand rien n'a changé. Verbeux à lire, jamais à taper.
 REGLAGES = "blink_reglages.json"
 REGLAGES_DEFAUT = {"usb_minutes": 10, "cloud_minutes": 1, "port": 8765, "timestamp": False,
-                   "timezone": detect_system_timezone(), "merge_jour": True, "merge_semaine": False,
+                   "timezone": detect_system_timezone(), "date_format": "iso", "time_format": "24h",
+                   "merge_jour": True, "merge_semaine": False,
                    "merge_mois": False, "download_auto": True, "live_protocol": "webrtc",
                    "font_size": None, "font_color": "white", "box_opacity": 0.55,
                    "trusted_host": "", "webhook_notif_url": "",
@@ -136,6 +160,9 @@ REGLAGES_DEFAUT = {"usb_minutes": 10, "cloud_minutes": 1, "port": 8765, "timesta
 # soit ce choix. MJPEG deja compare a MSE une fois (audit 28.15) et son
 # code mort retire depuis (commit 7339f85) : pas reintroduit comme
 # troisieme option sans raison nouvelle.
+FORMATS_DATE_VALIDES = ("iso", "mdy", "dmy")
+FORMATS_HEURE_VALIDES = ("24h", "12h")
+
 PROTOCOLES_LIVE_VALIDES = ("webrtc", "mse")
 # Hebdo et mensuel réencodaient par défaut la même matière que le quotidien
 # (chaque assemblage ré-encode ses clips, jamais un simple regroupement de
@@ -213,12 +240,8 @@ def _flottant_borne(valeurs: dict, champ: str, defaut: float,
 
 
 def _fuseau_reglages(valeurs: dict) -> str:
-    """Détermine le fuseau horaire en migrant l'ancien défaut figé vers le système."""
-    tz = str(valeurs.get("timezone", "") or "").strip()
-    sys_tz = detect_system_timezone()
-    if not tz or (tz == "Europe/Paris" and sys_tz != "Europe/Paris"):
-        return sys_tz
-    return tz
+    """Conserve un choix explicite, même si le système utilise un autre fuseau."""
+    return str(valeurs.get("timezone", "") or "").strip() or REGLAGES_DEFAUT["timezone"]
 
 
 def lire_reglages() -> dict:
@@ -245,6 +268,10 @@ def lire_reglages() -> dict:
         "port": _entier_borne(valeurs, "port", REGLAGES_DEFAUT["port"], 1, 65535),
         "timestamp": _booleen(valeurs, "timestamp", REGLAGES_DEFAUT["timestamp"]),
         "timezone": _fuseau_reglages(valeurs),
+        "date_format": valeurs.get("date_format") if valeurs.get("date_format")
+        in FORMATS_DATE_VALIDES else REGLAGES_DEFAUT["date_format"],
+        "time_format": valeurs.get("time_format") if valeurs.get("time_format")
+        in FORMATS_HEURE_VALIDES else REGLAGES_DEFAUT["time_format"],
         "merge_jour": _booleen(valeurs, "merge_jour", REGLAGES_DEFAUT["merge_jour"]),
         "merge_semaine": _booleen(valeurs, "merge_semaine", REGLAGES_DEFAUT["merge_semaine"]),
         "merge_mois": _booleen(valeurs, "merge_mois", REGLAGES_DEFAUT["merge_mois"]),
@@ -318,6 +345,7 @@ def ecrire_reglages(usb_minutes: int, cloud_minutes: int, port: int, timestamp: 
                     doorbell_auto_record_seconds: int | None = None,
                     doorbell_chime_enabled: bool | None = None,
                     doorbell_poll_interval_seconds: int | None = None,
+                    date_format: str | None = None, time_format: str | None = None,
                     dossier_sorties: str | None = None,
                     dossier: Path | None = None) -> None:
     cible = (app_dir() if dossier is None else dossier) / REGLAGES
@@ -332,6 +360,19 @@ def ecrire_reglages(usb_minutes: int, cloud_minutes: int, port: int, timestamp: 
         # Absent de l'appel : garder celui déjà enregistré. Le remettre à vide
         # renverrait en silence les clips suivants vers le dossier par défaut.
         dossier_sorties = str(actuel.get("dossier_sorties") or "")
+
+    for field, value, choices in (
+        ("date_format", date_format, FORMATS_DATE_VALIDES),
+        ("time_format", time_format, FORMATS_HEURE_VALIDES),
+    ):
+        if value is None:
+            value = actuel.get(field, REGLAGES_DEFAUT[field])
+        if value not in choices:
+            value = REGLAGES_DEFAUT[field]
+        if field == "date_format":
+            date_format = value
+        else:
+            time_format = value
 
     # Preserve or set doorbell settings
     if doorbell_alerts_enabled is None:
@@ -348,7 +389,8 @@ def ecrire_reglages(usb_minutes: int, cloud_minutes: int, port: int, timestamp: 
     _ecrire_texte_atomique(cible, json.dumps({
         "usb_minutes": int(usb_minutes), "cloud_minutes": int(cloud_minutes),
         "port": int(port), "timestamp": bool(timestamp),
-        "timezone": str(timezone), "merge_jour": bool(merge_jour),
+        "timezone": str(timezone), "date_format": date_format, "time_format": time_format,
+        "merge_jour": bool(merge_jour),
         "merge_semaine": bool(merge_semaine), "merge_mois": bool(merge_mois),
         "download_auto": bool(download_auto), "live_protocol": str(live_protocol),
         "font_size": int(font_size) if font_size is not None else None,
@@ -1027,6 +1069,20 @@ def git_commit_info() -> str:
                 return f"-{parts[0]}{dirty} {parts[1]}"
             return f"-{info}{dirty}"
     except Exception:
+        pass
+    return ""
+
+
+def git_commit_timestamp() -> str:
+    """Instant ISO avec décalage : la page peut afficher la date du build dans son fuseau."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(Path(__file__).resolve().parent), "log", "-1", "--format=%cI"],
+            capture_output=True, text=True, check=False, timeout=2)
+        instant = result.stdout.strip() if result.returncode == 0 else ""
+        if instant and dt.datetime.fromisoformat(instant).tzinfo is not None:
+            return instant
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         pass
     return ""
 

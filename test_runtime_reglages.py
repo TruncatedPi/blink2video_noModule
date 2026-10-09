@@ -93,7 +93,7 @@ class TestsReglages(unittest.TestCase):
         self.assertEqual(
             runtime.lire_reglages(),
             {"usb_minutes": 7, "cloud_minutes": 2, "port": 8899, "timestamp": False,
-             "timezone": "America/New_York", "merge_jour": True, "merge_semaine": False,
+             "timezone": "America/New_York", "date_format": "iso", "time_format": "24h", "merge_jour": True, "merge_semaine": False,
              "merge_mois": False, "download_auto": False, "live_protocol": "mse",
              "font_size": 40, "font_color": "yellow", "box_opacity": 0.3,
              "trusted_host": "100.101.194.5",
@@ -116,6 +116,7 @@ class TestsReglages(unittest.TestCase):
              "port": runtime.REGLAGES_DEFAUT["port"],
              "timestamp": runtime.REGLAGES_DEFAUT["timestamp"],
              "timezone": runtime.REGLAGES_DEFAUT["timezone"],
+             "date_format": "iso", "time_format": "24h",
              "merge_jour": runtime.REGLAGES_DEFAUT["merge_jour"],
              "merge_semaine": runtime.REGLAGES_DEFAUT["merge_semaine"],
              "merge_mois": runtime.REGLAGES_DEFAUT["merge_mois"],
@@ -205,12 +206,12 @@ class TestsReglages(unittest.TestCase):
         # lourd, plutôt qu'un copy rapide sans lui) : --no-timestamp aussi.
         self.assertEqual(
             runtime.standard(),
-            ("serve", "--port", "8765", "--timezone", "Europe/Paris",
+            ("serve", "--port", "8765", "--timezone", runtime.REGLAGES_DEFAUT["timezone"],
              "--trusted-host", "",
              "watch", "--loop", "10",
              "download", "--from", "all", "--usb-loop", "10",
              "--cloud-loop", "1",
-             "merge", "--loop", "5", "--timezone", "Europe/Paris",
+             "merge", "--loop", "5", "--timezone", runtime.REGLAGES_DEFAUT["timezone"],
              "--no-timestamp", "--no-weekly", "--no-monthly"))
 
     def test_standard_reflete_les_reglages_enregistres(self):
@@ -320,7 +321,7 @@ class TestsReglages(unittest.TestCase):
         composition = runtime.standard()
         n = runtime.LONGUEUR_BLOC_SERVE
         self.assertEqual(composition[:n],
-                         ("serve", "--port", "8765", "--timezone", "Europe/Paris",
+                         ("serve", "--port", "8765", "--timezone", runtime.REGLAGES_DEFAUT["timezone"],
                           "--trusted-host", ""))
         self.assertEqual(composition[n], "watch")
 

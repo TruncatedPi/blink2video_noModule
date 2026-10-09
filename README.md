@@ -106,6 +106,13 @@ remembered between visits.
 
 ![The Settings panel](Screenshots/settings.PNG)
 
+Dates and times use one saved display configuration across events, clips, live
+recordings, pictures, camera readings and day groups. In **Settings → General →
+Date and time**, choose YYYY-MM-DD, MM/DD/YYYY or DD/MM/YYYY and a 12- or 24-hour
+clock. **Pacific UTC−07:00 (no DST)** selects a fixed offset for the whole year
+(IANA name `Etc/GMT+7`). Apply the settings to restart with the selected timezone;
+UTC filenames and stored timestamps retain their original meaning.
+
 Settings, behind the gear icon: automatic startup with the session, automatic
 page refresh, server port, videos folder with a native folder picker, and local
 storage and cloud polling cadence. Also timestamp burned into the picture

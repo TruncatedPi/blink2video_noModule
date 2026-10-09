@@ -13,7 +13,7 @@ from pathlib import Path
 REGLAGES = {
     "usb_minutes": 17, "cloud_minutes": 3, "port": 8127,
     "storage_dir": "C:/Vidéos & archives/Blink", "timestamp": True,
-    "timezone": "Europe/Paris", "live_protocol": "webrtc",
+    "timezone": "Europe/Paris", "date_format": "mdy", "time_format": "12h", "live_protocol": "webrtc",
     "merge_jour": True, "merge_semaine": True, "merge_mois": False,
     "download_auto": True, "initial_setup": False,
     "webhook_token": "jeton-test-abc123",
@@ -36,7 +36,7 @@ class TestsFormulaireReglages(unittest.TestCase):
         if cls.node is None:
             raise unittest.SkipTest("node introuvable")
         source = (Path(__file__).parent / "serve_app.js").read_text(encoding="utf-8")
-        debut = source.index("let portActuel = null;")
+        debut = source.index('$("timezonePacific").onclick')
         fin = source.index('$("filtreButton").onclick', debut)
         fragments = [source[debut:fin]]
         for nom in ("lireJSON", "appliquerDependanceMergeJour", "appliquerDependanceDownloadAuto",
@@ -66,6 +66,7 @@ let rechargements = 0, reponseCourante, libererGet;
 const attenteListes = new Promise(() => {});
 const ids = [
   'usbMinutes', 'cloudMinutes', 'port', 'storageDir', 'timestamp', 'timezone',
+  'dateFormat', 'timeFormat', 'timezonePacific',
   'liveProtocol', 'mergeJour', 'mergeSemaine', 'mergeMois', 'downloadAuto',
   'initialSetupHint', 'reglagesClose', 'stopButton', 'reglages', 'reglagesButton',
   'webhookUrl', 'webhookRegenerer', 'fontSize', 'fontColor', 'boxOpacity',
@@ -190,7 +191,8 @@ function capturer() {
     def test_tous_les_champs_et_protocoles_sont_affiches(self):
         valeurs = {
             "usbMinutes": "usb_minutes", "cloudMinutes": "cloud_minutes", "port": "port",
-            "storageDir": "storage_dir", "timezone": "timezone", "liveProtocol": "live_protocol",
+            "storageDir": "storage_dir", "timezone": "timezone", "dateFormat": "date_format",
+            "timeFormat": "time_format", "liveProtocol": "live_protocol",
             "fontSize": "font_size", "fontColor": "font_color", "boxOpacity": "box_opacity",
             "trustedHost": "trusted_host", "webhookNotifUrl": "webhook_notif_url",
             "liveAutoStopSeconds": "live_auto_stop_seconds",

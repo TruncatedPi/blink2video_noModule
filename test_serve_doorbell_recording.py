@@ -255,6 +255,21 @@ class DoorbellRecordingTests(unittest.TestCase):
         self.assertEqual(event["recording_status"], "recorded")
         self.assertEqual(event["recording_path"], "clip.mp4")
 
+    def test_disable_during_retry_wait_cancels_before_second_camera_request(self):
+        serve._publier_evenements_sonnette([self.event], self.settings)
+        handler = mock.Mock(error="Live view failed", enregistrement_cree=None,
+                            enregistrement_erreur="")
+
+        def disable(timeout):
+            self.settings["doorbell_auto_record"] = False
+            return False
+
+        with mock.patch.object(serve, "_EnregistreurSonnette", return_value=handler) as recorder, \
+             mock.patch.object(self.stop, "wait", side_effect=disable):
+            serve._doorbell_record_loop()
+        self.assertEqual(recorder.call_count, 1)
+        self.assertEqual(serve.DOORBELL_EVENTS[0]["recording_status"], "cancelled")
+
     def test_collect_inclut_created_at_iso_utc(self):
         """collect() inclut le champ created_at au format ISO 8601 UTC."""
         from zoneinfo import ZoneInfo
