@@ -334,11 +334,31 @@ DOORBELL_MONITOR_THREAD: threading.Thread | None = None
 DOORBELL_RECORD_THREAD: threading.Thread | None = None
 DOORBELL_RECORD_QUEUE: queue.Queue = queue.Queue(maxsize=100)
 DOORBELL_MAX_EVENTS = 100
+DOORBELL_LAST_SEEN_TIMESTAMPS: dict[str, str] = {}
+DOORBELL_LAST_EVENT_TIMES: dict[str, float] = {}
+DOORBELL_CONFIG_UPDATE_UNTIL: float = 0.0
+LIVE_VIEW_ACTIVE_UNTIL: float = 0.0
+
+
+def _prolonger_fenetre_direct(secondes: float) -> None:
+    """Prolonge la fenêtre d'inhibition des alertes sonnette dues au direct/réveil."""
+    global LIVE_VIEW_ACTIVE_UNTIL
+    LIVE_VIEW_ACTIVE_UNTIL = max(LIVE_VIEW_ACTIVE_UNTIL, time.time() + secondes)
 
 
 async def _poll_doorbells_async(blink_instance) -> list[dict]:
-    """Lit des événements explicites et leur associe la caméra stable."""
-    events = await blink_events.poll(blink_instance)
+    """Lit des événements explicites et leur associe la caméra stable.
+
+    Pour les sonnettes autonomes (sans Sync Module ni abonnement cloud),
+    se replie sur le suivi de `updated_at` de l'écran d'accueil avec filtrage
+    strict des faux positifs (direct, photo, réveil, réglages).
+    """
+    events = []
+    try:
+        events = await blink_events.poll(blink_instance)
+    except Exception:
+        events = []
+
     for event in events:
         candidates = []
         for sync in blink_instance.sync.values():
@@ -348,11 +368,112 @@ async def _poll_doorbells_async(blink_instance) -> list[dict]:
                           or attributes.get("camera_id") or attributes.get("id") or "")
                 nid = str(getattr(camera, "network_id", None)
                           or getattr(sync, "network_id", ""))
-                if nid == event["network_id"] and cid == event["camera_id"]:
+                if nid == str(event.get("network_id")) and cid == str(event.get("camera_id")):
                     candidates.append(camera_key(sync, name, camera))
         if len(candidates) == 1:
             event["camera_key"] = candidates[0]
-    return events
+
+    if events:
+        return events
+
+    # Repli pour sonnettes autonomes sans flux d'événements réseau / média
+    home = getattr(blink_instance, "homescreen", None)
+    if not home:
+        try:
+            await blink_instance.get_homescreen()
+            home = getattr(blink_instance, "homescreen", None)
+        except Exception:
+            return []
+    home = home or {}
+    doorbells = [db for db in (home.get("doorbells") or []) if isinstance(db, dict)]
+    if not doorbells:
+        return []
+
+    now = time.time()
+    synthesized_events = []
+
+    for db in doorbells:
+        cid = str(db.get("id") or "")
+        nid = str(db.get("network_id") or "")
+        name = str(db.get("name") or cid)
+        updated_at = str(db.get("updated_at") or "")
+        if not cid or not updated_at:
+            continue
+
+        instant = blink_events.event_time(updated_at)
+        if instant is None:
+            continue
+        age = now - instant.timestamp()
+        if age < -10 or age > blink_events.EVENT_MAX_AGE_SECONDS:
+            with DOORBELL_EVENTS_LOCK:
+                DOORBELL_LAST_SEEN_TIMESTAMPS[cid] = updated_at
+            continue
+
+        with DOORBELL_EVENTS_LOCK:
+            prev = DOORBELL_LAST_SEEN_TIMESTAMPS.get(cid)
+            if prev is None:
+                DOORBELL_LAST_SEEN_TIMESTAMPS[cid] = updated_at
+                continue
+            if prev == updated_at:
+                continue
+            DOORBELL_LAST_SEEN_TIMESTAMPS[cid] = updated_at
+
+        # Suppression des faux positifs
+        if now < DOORBELL_CONFIG_UPDATE_UNTIL:
+            continue
+        if now < LIVE_VIEW_ACTIVE_UNTIL or MODULE_SLOT_INFO.get("quoi") in (
+            "direct WebRTC", "direct MSE", "reveil", "snapshot"
+        ):
+            continue
+        last_event_time = DOORBELL_LAST_EVENT_TIMES.get(cid, 0.0)
+        if now - last_event_time < 12.0:
+            continue
+        DOORBELL_LAST_EVENT_TIMES[cid] = now
+
+        # Qualification du type : mouvement si armé, appui bouton si désarmé
+        is_camera_armed = bool(db.get("enabled"))
+        net = next((n for n in (home.get("networks") or []) if str(n.get("id")) == nid), None)
+        is_network_armed = bool(net.get("armed")) if net else True
+        is_armed = is_camera_armed and is_network_armed
+
+        event_type = "motion" if is_armed else "ring"
+        title = (
+            f"Doorbell Motion: {name}"
+            if event_type == "motion"
+            else f"Doorbell Ring: {name}"
+        )
+
+        identity = hashlib.sha256(json.dumps(
+            [nid, cid, event_type, updated_at], separators=(",", ":")
+        ).encode("utf-8")).hexdigest()
+
+        cam_key = ""
+        candidates = []
+        for sync in blink_instance.sync.values():
+            for cname, camera in (getattr(sync, "cameras", None) or {}).items():
+                attributes = getattr(camera, "attributes", None) or {}
+                c_cid = str(getattr(camera, "device_id", None)
+                            or attributes.get("camera_id") or attributes.get("id") or "")
+                c_nid = str(getattr(camera, "network_id", None)
+                            or getattr(sync, "network_id", ""))
+                if c_nid == nid and c_cid == cid:
+                    candidates.append(camera_key(sync, cname, camera))
+        if len(candidates) == 1:
+            cam_key = candidates[0]
+
+        synthesized_events.append({
+            "source_event_id": identity,
+            "camera_id": cid,
+            "network_id": nid,
+            "camera": name,
+            "type": event_type,
+            "title": title,
+            "timestamp": updated_at,
+            "camera_key": cam_key,
+            "verified": True,
+        })
+
+    return synthesized_events
 
 
 def _mettre_a_jour_enregistrement_evenement(event_id: str, **changes) -> None:
@@ -2744,6 +2865,9 @@ class Handler(serveweb.Handler):
         return state
 
     def set_armed(self, scope: str, identity: str, armed: bool) -> None:
+        global DOORBELL_CONFIG_UPDATE_UNTIL
+        DOORBELL_CONFIG_UPDATE_UNTIL = time.time() + 20.0
+
         def apply(blink):
             async def run(_blink=blink):
                 if scope == "system":
@@ -2797,6 +2921,7 @@ class Handler(serveweb.Handler):
                     raise RuntimeError("Blink n'a pas confirme le reveil de la camera.")
             return run()
 
+        _prolonger_fenetre_direct(90.0)
         if not MODULE_SLOT.acquire(blocking=False):
             raise blink_engine.BusyError(_slot_occupe_message())
         try:
@@ -2811,6 +2936,7 @@ class Handler(serveweb.Handler):
                 _slot_rendu()
             finally:
                 MODULE_SLOT.release()
+                _prolonger_fenetre_direct(45.0)
 
     def declencher_snapshot(self, identity: str) -> Path:
         """Prend une photo à la demande et la garde, contrairement à
@@ -2868,6 +2994,7 @@ class Handler(serveweb.Handler):
                 resultat["corps"] = corps
             return run()
 
+        _prolonger_fenetre_direct(90.0)
         if not MODULE_SLOT.acquire(blocking=False):
             raise blink_engine.BusyError(_slot_occupe_message())
         try:
@@ -2879,6 +3006,7 @@ class Handler(serveweb.Handler):
                 _slot_rendu()
             finally:
                 MODULE_SLOT.release()
+                _prolonger_fenetre_direct(45.0)
 
         dossier = self.paths["snapshots"] / safe_file(resultat["nom"])
         dossier.mkdir(parents=True, exist_ok=True)
@@ -3228,6 +3356,7 @@ class Handler(serveweb.Handler):
             self.send_json({"error": "Offre SDP ou identifiant de session invalide."}, 400)
             return
 
+        _prolonger_fenetre_direct(90.0)
         if not MODULE_SLOT.acquire(blocking=False):
             message = _slot_occupe_message()
             _memoriser_erreur_direct(name, message, 409)
@@ -3262,6 +3391,7 @@ class Handler(serveweb.Handler):
                         _slot_rendu()
                     finally:
                         MODULE_SLOT.release()
+                        _prolonger_fenetre_direct(45.0)
 
         async def _nettoyer() -> None:
             try:
@@ -3451,6 +3581,7 @@ class Handler(serveweb.Handler):
             # un identifiant mal formé perd juste le bénéfice de l'arrêt
             # explicite, le direct lui-même n'a pas besoin de session_id.
             session_id = ""
+        _prolonger_fenetre_direct(90.0)
         if not (MODULE_SLOT.acquire(timeout=attente_module) if attente_module
                 else MODULE_SLOT.acquire(blocking=False)):
             message = _slot_occupe_message()
@@ -3857,6 +3988,7 @@ class Handler(serveweb.Handler):
                 _slot_rendu()
             finally:
                 MODULE_SLOT.release()
+                _prolonger_fenetre_direct(45.0)
 
             # Diagnostic seulement après avoir rendu toutes les ressources :
             # sa lecture attend un fil et manipulait auparavant bytes comme str,
@@ -5011,6 +5143,7 @@ class Handler(serveweb.Handler):
                     camera_name = "Doorbell"
 
             now_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+            evt_type = str(payload.get("type") or "ring")
             evt = {
                 "id": uuid.uuid4().hex,
                 "camera": camera_name,
@@ -5019,8 +5152,12 @@ class Handler(serveweb.Handler):
                 "camera_key": camera_identity,
                 "verified": True,
                 "test": True,
-                "type": "ring",
-                "title": f"Doorbell Event: {camera_name}",
+                "type": evt_type,
+                "title": (
+                    f"Doorbell Motion: {camera_name}"
+                    if evt_type == "motion"
+                    else f"Doorbell Ring: {camera_name}"
+                ),
                 "timestamp": now_iso,
                 "created_at": time.time(),
                 "acknowledged": False,

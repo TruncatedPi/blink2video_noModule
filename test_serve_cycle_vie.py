@@ -20,7 +20,7 @@ import runtime
 
 class TestsCycleVieServeur(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="blink-serve-cycle-")
+        self.temp = tempfile.TemporaryDirectory(prefix="blink-serve-cycle-", ignore_cleanup_errors=True)
         self.home = Path(self.temp.name)
         self.process = None
         self.pids = set()

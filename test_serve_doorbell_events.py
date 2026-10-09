@@ -9,6 +9,8 @@ Covers:
 
 from __future__ import annotations
 
+import asyncio
+import datetime as dt
 import io
 import json
 import os
@@ -40,13 +42,21 @@ class TestDoorbellEvents(unittest.TestCase):
         for path in self.paths.values():
             path.mkdir(parents=True, exist_ok=True)
 
-        # Clear events before each test
+        # Clear events and doorbell state before each test
         with serve.DOORBELL_EVENTS_LOCK:
             serve.DOORBELL_EVENTS.clear()
+            serve.DOORBELL_LAST_SEEN_TIMESTAMPS.clear()
+            serve.DOORBELL_LAST_EVENT_TIMES.clear()
+        serve.LIVE_VIEW_ACTIVE_UNTIL = 0.0
+        serve.DOORBELL_CONFIG_UPDATE_UNTIL = 0.0
 
     def tearDown(self) -> None:
         with serve.DOORBELL_EVENTS_LOCK:
             serve.DOORBELL_EVENTS.clear()
+            serve.DOORBELL_LAST_SEEN_TIMESTAMPS.clear()
+            serve.DOORBELL_LAST_EVENT_TIMES.clear()
+        serve.LIVE_VIEW_ACTIVE_UNTIL = 0.0
+        serve.DOORBELL_CONFIG_UPDATE_UNTIL = 0.0
         self.tmp_dir.cleanup()
 
     def build_handler(self) -> serve.Handler:
@@ -294,6 +304,139 @@ class TestDoorbellEvents(unittest.TestCase):
 
         _, get_res2 = self.call_get(handler, "/api/events")
         self.assertEqual(len(get_res2["events"]), 0)
+
+    def test_post_events_test_motion_type(self) -> None:
+        """POST /api/events/test with type='motion' creates a motion event."""
+        handler = self.build_handler()
+        code, res = self.call_post(handler, "/api/events/test", {"camera": "Front Door", "type": "motion"})
+        self.assertEqual(code, 200)
+        self.assertTrue(res["ok"])
+        event = res["event"]
+        self.assertEqual(event["camera"], "Front Door")
+        self.assertEqual(event["type"], "motion")
+        self.assertEqual(event["title"], "Doorbell Motion: Front Door")
+        self.assertFalse(event["acknowledged"])
+
+    def test_poll_doorbells_async_synthetise_mouvement_quand_arme(self) -> None:
+        """Standalone doorbell wakeup when armed emits a motion event with valid camera_key."""
+        t0 = "2026-10-08T20:00:00+00:00"
+        t1 = "2026-10-08T20:00:15+00:00"
+        now = dt.datetime.fromisoformat(t1).timestamp()
+
+        class MockCamera:
+            name = "Front Door"
+            attributes = {"camera_id": "167612"}
+            device_id = "167612"
+            network_id = "498256"
+
+        class MockSync:
+            network_id = "498256"
+            cameras = {"Front Door": MockCamera()}
+
+        doorbell_entry = {
+            "id": 167612,
+            "network_id": 498256,
+            "name": "Front Door",
+            "enabled": True,
+            "updated_at": t0,
+        }
+        mock_blink = mock.AsyncMock()
+        mock_blink.sync = {"Sync1": MockSync()}
+        mock_blink.homescreen = {
+            "doorbells": [doorbell_entry],
+            "networks": [{"id": 498256, "armed": True}],
+        }
+
+        with mock.patch("blink_events.poll", new=mock.AsyncMock(return_value=[])), \
+             mock.patch("time.time", return_value=now):
+            # First poll: baseline observation, no event emitted
+            events0 = asyncio.run(serve._poll_doorbells_async(mock_blink))
+            self.assertEqual(events0, [])
+            self.assertEqual(serve.DOORBELL_LAST_SEEN_TIMESTAMPS.get("167612"), t0)
+
+            # Second poll: updated_at changed, camera and network armed -> motion event
+            doorbell_entry["updated_at"] = t1
+            events1 = asyncio.run(serve._poll_doorbells_async(mock_blink))
+            self.assertEqual(len(events1), 1)
+            evt = events1[0]
+            self.assertEqual(evt["type"], "motion")
+            self.assertEqual(evt["camera"], "Front Door")
+            self.assertEqual(evt["camera_id"], "167612")
+            self.assertEqual(evt["network_id"], "498256")
+            self.assertTrue(evt["camera_key"].startswith("camera-"))
+            self.assertIn("Doorbell Motion", evt["title"])
+
+    def test_poll_doorbells_async_synthetise_ring_quand_desarme(self) -> None:
+        """Standalone doorbell wakeup when disarmed emits a ring event."""
+        t0 = "2026-10-08T20:00:00+00:00"
+        t1 = "2026-10-08T20:00:15+00:00"
+        now = dt.datetime.fromisoformat(t1).timestamp()
+
+        doorbell_entry = {
+            "id": 167612,
+            "network_id": 498256,
+            "name": "Front Door",
+            "enabled": False,
+            "updated_at": t0,
+        }
+        mock_blink = mock.AsyncMock()
+        mock_blink.sync = {}
+        mock_blink.homescreen = {
+            "doorbells": [doorbell_entry],
+            "networks": [{"id": 498256, "armed": False}],
+        }
+
+        with mock.patch("blink_events.poll", new=mock.AsyncMock(return_value=[])), \
+             mock.patch("time.time", return_value=now):
+            events0 = asyncio.run(serve._poll_doorbells_async(mock_blink))
+            self.assertEqual(events0, [])
+
+            doorbell_entry["updated_at"] = t1
+            events1 = asyncio.run(serve._poll_doorbells_async(mock_blink))
+            self.assertEqual(len(events1), 1)
+            self.assertEqual(events1[0]["type"], "ring")
+            self.assertIn("Doorbell Ring", events1[0]["title"])
+
+    def test_poll_doorbells_async_inhibition_direct_et_reglages(self) -> None:
+        """False alerts from active live view, config changes, and cooldown are suppressed."""
+        t0 = "2026-10-08T20:00:00+00:00"
+        t1 = "2026-10-08T20:00:15+00:00"
+        now = dt.datetime.fromisoformat(t1).timestamp()
+
+        doorbell_entry = {
+            "id": 167612,
+            "network_id": 498256,
+            "name": "Front Door",
+            "enabled": True,
+            "updated_at": t0,
+        }
+        mock_blink = mock.AsyncMock()
+        mock_blink.sync = {}
+        mock_blink.homescreen = {
+            "doorbells": [doorbell_entry],
+            "networks": [{"id": 498256, "armed": True}],
+        }
+
+        with mock.patch("blink_events.poll", new=mock.AsyncMock(return_value=[])), \
+             mock.patch("time.time", return_value=now):
+            asyncio.run(serve._poll_doorbells_async(mock_blink))
+
+            # Suppressed by LIVE_VIEW_ACTIVE_UNTIL
+            doorbell_entry["updated_at"] = t1
+            serve.LIVE_VIEW_ACTIVE_UNTIL = now + 60.0
+            self.assertEqual(asyncio.run(serve._poll_doorbells_async(mock_blink)), [])
+            serve.LIVE_VIEW_ACTIVE_UNTIL = 0.0
+
+            # Suppressed by DOORBELL_CONFIG_UPDATE_UNTIL
+            doorbell_entry["updated_at"] = "2026-10-08T20:00:20+00:00"
+            serve.DOORBELL_CONFIG_UPDATE_UNTIL = now + 20.0
+            self.assertEqual(asyncio.run(serve._poll_doorbells_async(mock_blink)), [])
+            serve.DOORBELL_CONFIG_UPDATE_UNTIL = 0.0
+
+            # Suppressed by MODULE_SLOT_INFO (active live streaming)
+            doorbell_entry["updated_at"] = "2026-10-08T20:00:25+00:00"
+            with mock.patch.object(serve, "MODULE_SLOT_INFO", {"quoi": "direct MSE"}):
+                self.assertEqual(asyncio.run(serve._poll_doorbells_async(mock_blink)), [])
 
 
 if __name__ == "__main__":

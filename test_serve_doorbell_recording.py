@@ -227,6 +227,17 @@ class DoorbellRecordingTests(unittest.TestCase):
         self.assertIn(b"moov", files[0].read_bytes())
         self.assertIn(b"moof", files[0].read_bytes())
 
+    def test_evenement_mouvement_declenche_enregistrement_automatique(self):
+        """Un événement de mouvement déclenche l'enregistrement automatique comme un appui bouton."""
+        motion_event = dict(self.event, source_event_id="motion-event", id="motion-event",
+                            type="motion", title="Doorbell Motion: Porte")
+        serve._publier_evenements_sonnette([motion_event], self.settings)
+        self.assertEqual(self.jobs.qsize(), 1)
+        job_event, duration = self.jobs.get_nowait()
+        self.assertEqual(job_event["type"], "motion")
+        self.assertEqual(duration, 30)
+        self.assertEqual(serve.DOORBELL_EVENTS[0]["recording_status"], "pending")
+
 
 if __name__ == "__main__":
     unittest.main()
