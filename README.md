@@ -355,6 +355,44 @@ the public internet all the same, a LAN-only caller is the intended use.
 </details>
 
 <details>
+<summary>Status and arming webhooks, in detail</summary>
+
+Two more routes for scripts (home automation, a scheduler of your own), with
+the same secret as the picture webhook, so there is only one to keep safe.
+
+- `GET /webhook/status?token=<secret>` answers with the state of every system
+  and camera as JSON; add `&camera=<name>` for one camera. Each camera has
+  `name`, `system`, `armed` (its detection), `online`, `status`, `battery` (a
+  status such as `ok`, not a percentage), `battery_signal`, `voltage`,
+  `temperature_c`, `wifi`, `firmware`, `model` and `age_seconds` (how old the
+  reading is). The fields are those Blink gives: a camera that does not report
+  one (a plugged-in Mini has no battery) shows `null`, and Blink has changed
+  such fields before, so a script should tolerate a missing value.
+- `GET` or `POST /webhook/arm?camera=<name>&armed=true&token=<secret>` arms or
+  disarms one camera; use `system=<name>` instead of `camera` for a whole
+  system. `armed` accepts `true`/`false`, `1`/`0`, `on`/`off`. The answer is
+  `{"ok": true, "requested": ..., "changed": ..., "applied": ...}` with the
+  camera or system as Blink reports it right after. `changed` is false when it
+  was already in the requested state (as blink2video knew it before the call);
+  `applied` is false if Blink had not caught up yet. An offline camera is not
+  tried: you get `409` with its state and a clear message instead of waiting for
+  a timeout. An unknown name is `404`, a name shared by two items is `409`, a
+  missing or wrong secret is `403`.
+- Several cameras in one call: repeat the parameter,
+  `camera=Garage&camera=Loft&armed=false`. The answer is
+  `{"ok": ..., "scope": "cameras", "cameras": [...]}` with one result per camera
+  (its own `ok`, `status_code`, `changed`, `applied` or `error`), always with
+  status `200`: an offline or unknown camera does not stop the others, and the
+  overall `ok` is true only if all of them succeeded.
+
+Treat the secret like a password: whoever has it can now also switch your
+cameras off, not only take a picture. Every change made through the arming
+webhook is appended to `armement-webhook.log` in the data folder, with the
+caller's address. Same advice as for the picture: keep it on your local network.
+
+</details>
+
+<details>
 <summary>Webhook notification, in detail</summary>
 
 The opposite direction from the one above, and unrelated to it: `POST` a

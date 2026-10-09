@@ -1,0 +1,2 @@
+# Les clips de test sont des octets exacts : jamais de conversion de fins de ligne.
+*.mp4 binary

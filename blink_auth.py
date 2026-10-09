@@ -18,6 +18,7 @@ import time
 import uuid
 
 import runtime
+import blink_tls
 
 import certifi
 from aiohttp import ClientSession, TCPConnector
@@ -89,9 +90,7 @@ def contexte_tls() -> ssl.SSLContext:
     on lui ajoute celui de certifi, sans jamais désactiver la validation TLS ni
     le contrôle du nom d'hôte.
     """
-    contexte = ssl.create_default_context()
-    contexte.load_verify_locations(cafile=certifi.where())
-    return contexte
+    return blink_tls.contexte_tls()
 
 
 def session_http() -> ClientSession:

@@ -28,10 +28,14 @@ class TestsSelecteurDeCamera(unittest.TestCase):
         cls.source = (RACINE / "serve_app.js").read_text(encoding="utf-8")
 
     def test_les_deux_remplissages_posent_les_noms_seuls(self):
-        # Au chargement des clips, et à chaque changement de langue.
+        # Au chargement des clips, à chaque changement de langue, et (issue #40)
+        # quand on masque ou dévoile une caméra : au moins ces cas, et AUCUN
+        # remplissage de ce sélecteur ne pose autre chose que les noms.
         appels = re.findall(r'fill\(\$\("camera"\), camerasConnues\(\), t\("filter\.allcameras"\)\);',
                             self.source)
-        self.assertEqual(len(appels), 2)
+        tous = re.findall(r'fill\(\$\("camera"\)', self.source)
+        self.assertGreaterEqual(len(appels), 2)
+        self.assertEqual(len(appels), len(tous))
         self.assertNotIn("data.models", self.source)
 
     def test_fill_pose_le_nom_tel_quel_et_garde_la_selection(self):

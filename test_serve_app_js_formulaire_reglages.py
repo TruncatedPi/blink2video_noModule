@@ -71,7 +71,7 @@ const ids = [
   'webhookUrl', 'webhookRegenerer', 'fontSize', 'fontColor', 'boxOpacity',
   'trustedHost', 'webhookNotifUrl', 'liveAutoStopSeconds', 'redemarrerButton',
   'doorbellAlertsEnabled', 'doorbellChimeEnabled', 'doorbellAutoRecord', 'doorbellAutoRecordSeconds', 'doorbellPollSeconds',
-  'tabGeneral', 'tabVideo', 'tabAcces', 'tabAlertes',
+  'tabGeneral', 'tabVideo', 'tabAcces', 'tabAlertes', 'tailleCartes', 'barrePagination',
   'panelGeneral', 'panelVideo', 'panelAcces', 'panelAlertes',
 ];
 class Element {
@@ -118,6 +118,9 @@ globalThis.chargerSuppressionAuto = () => {
   evenements.push('chargerSuppressionAuto');
   return attenteListes;
 };
+globalThis.chargerCamerasMasquees = () => {};
+globalThis.tailleCartes = 'moyennes';
+globalThis.barrePaginationHaute = true;
 globalThis.fetch = async (url, options) => {
   if (url !== '/api/reglages' || options !== undefined) {
     throw new Error(`Requête inattendue : ${url}`);

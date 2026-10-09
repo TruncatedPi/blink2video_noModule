@@ -168,6 +168,35 @@ class TestsRoutagePost(unittest.TestCase):
         handler.rfile.read.assert_not_called()
         self.assert_aucun_traitement(handler)
 
+    def test_reessai_mise_a_jour_efface_la_conclusion_avant_de_lancer(self):
+        with tempfile.TemporaryDirectory(prefix="blink-post-maj-reessai-") as donnees, \
+                mock.patch.dict(os.environ, {"BLINK_HOME": donnees}), \
+                mock.patch.object(serve.maj, "disponible", return_value={"version": "0.99.0"}):
+            with mock.patch.object(serve.runtime.os, "getpid", return_value=202):
+                serve.runtime.travail("Arrêt échoué", 1, 1, cle="phase.update_noop")
+                serve.runtime.fin_travail(conserver=10)
+            conclusion = serve.runtime._fichier_travail(202)
+            self.assertTrue(conclusion.exists())
+
+            def lancer(*_args, **kwargs):
+                kwargs["stdout"].close()
+                self.assertFalse(conclusion.exists())
+                self.assertEqual(serve.runtime.travail_affichable(), {})
+
+            handler = self.handler("/api/update")
+            with mock.patch.object(serve.runtime, "demarrer", side_effect=lancer) as demarrer:
+                handler.do_POST()
+            demarrer.assert_called_once()
+            handler.send_json.assert_called_once_with({"ok": True, "version": "0.99.0"})
+
+    def test_reessai_mise_a_jour_refuse_si_la_conclusion_reste_occupee(self):
+        handler = self.handler("/api/update")
+        with mock.patch.object(serve.maj, "disponible", return_value={"version": "0.99.0"}), \
+                mock.patch.object(serve.runtime, "effacer_conclusion_travail", return_value=False):
+            handler.do_POST()
+        handler.send_json.assert_called_once_with({
+            "error": "La conclusion de la mise à jour précédente est encore occupée. Réessayez."}, 409)
+
     def test_chaque_route_transmet_uniquement_son_payload(self):
         payload = {"camera": "Entrée [réseau 1, appareil 2]", "actif": False,
                    "reglages": {"port": 8765}, "liste": [1, None, True]}

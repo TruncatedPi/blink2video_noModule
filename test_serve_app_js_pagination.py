@@ -59,6 +59,7 @@ let plageClips = {preset:'all'}, plageEnAttente = null;
 const paramsPourPlage = () => '';
 const fetch = async url => url.startsWith('/api/clips') ? structuredClone(data) : [];
 const lireJSON = async answer => answer;
+const estMasquee = () => false; const comparerNoms = (a, b) => String(a).localeCompare(String(b));
 const fill = () => {}, camerasConnues = () => [], sauvegarderFiltre = () => {};
 const majBoutonAppliquer = () => {}, chargerSnapshots = () => {};
 const render = () => renderClips();
@@ -81,6 +82,22 @@ console.log(JSON.stringify({html:$('list').innerHTML,page:pageClips,size:clipsPa
         self.assertEqual(sortie["html"].count('<div class="clip-player"'), 50)
         self.assertIn('&quot;pages&quot;:33', sortie["html"])
         self.assertEqual(sortie["size"], 50)
+
+    def test_barre_du_haut_masquee_garde_celle_du_bas(self):
+        # La coche « Afficher la barre de pagination en haut de la liste » (panneau Réglages,
+        # propre au navigateur) : masquée, il reste la barre du bas pour changer de page.
+        visible = self.executer()
+        masquee = self.executer(stockage={"blink2video.barrePagination": "0"})
+        self.assertEqual(visible["html"].count('<option value="50" selected>'), 2)
+        self.assertEqual(masquee["html"].count('<option value="50" selected>'), 1)
+        self.assertTrue(visible["html"].lstrip().startswith("<nav"))
+        self.assertFalse(masquee["html"].lstrip().startswith("<nav"))
+        self.assertTrue(masquee["html"].rstrip().endswith("</nav>"))
+        self.assertEqual(self.identities(masquee), self.identities(visible))     # les clips, eux, restent
+
+    def test_barre_visible_par_defaut_meme_sans_stockage(self):
+        sortie = self.executer(stockage_indisponible=True)
+        self.assertEqual(sortie["html"].count('<option value="50" selected>'), 2)
 
     def test_taille_par_le_vrai_gestionnaire_et_retour_premiere_page(self):
         for taille, pages in ((25, 65), (100, 17), (0, 1)):
@@ -253,6 +270,44 @@ changerPageClips(1);
         sortie = self.executer("changerPageClips(12); $('camera').value='B'; await appliquerFiltre();")
         self.assertEqual(sortie["page"], 0)
         self.assertEqual(self.identities(sortie), [f'clip-{i}' for i in range(1,100,2)])
+
+
+class TestsBarrePagination(unittest.TestCase):
+    """La barre « Clips par page » : alignée à gauche, figée sous l'en-tête pendant le
+    défilement (capture de Nico du 2026-10-07). Le rendu réel a été vu dans un navigateur ;
+    ici, ce qui empêche le retour en arrière."""
+
+    def test_barre_a_gauche_et_figee_sous_l_entete(self):
+        css = Path(__file__).with_name("serve_style.css").read_text(encoding="utf-8")
+        regle = re.search(r"\.pagination \{([^}]*)\}", css).group(1)
+        self.assertIn("justify-content:flex-start", regle)
+        self.assertNotIn("center", regle.split("justify-content:")[1].split(";")[0])
+        figee = re.search(r"#list > \.pagination:first-child \{([^}]*)\}", css).group(1)
+        self.assertIn("position:sticky", figee)
+        self.assertIn("top:var(--entete-h", figee)
+
+    def test_la_barre_ne_glisse_pas_entre_sa_place_naturelle_et_sa_place_figee(self):
+        # Avec 20 px de marge en haut de <main>, la barre glissait de 20 px quand on bougeait
+        # l'ascenseur près du haut (capture de Nico du 2026-10-07) : sa place naturelle doit
+        # etre la place figee, collee a l'en-tete.
+        css = Path(__file__).with_name("serve_style.css").read_text(encoding="utf-8")
+        main = re.search(r"main \{ padding:([^;]*);", css).group(1)
+        self.assertTrue(main.startswith("0 "), main)
+        self.assertIn("#list > :first-child:not(.pagination) { margin-top:20px; }", css)
+
+    def test_la_coche_du_panneau_reglages_commande_la_barre(self):
+        serve = Path(__file__).with_name("serve.py").read_text(encoding="utf-8")
+        js = Path(__file__).with_name("serve_app.js").read_text(encoding="utf-8")
+        self.assertIn('id="barrePagination"', serve)
+        self.assertIn('$("barrePagination").onchange', js)
+        self.assertIn('$("barrePagination").checked = barrePaginationHaute', js)
+        for cle in ("reglages.barrePagination", "reglages.barrePagination.title"):
+            self.assertEqual(js.count(f'"{cle}":'), 2, cle)       # français et anglais
+
+    def test_la_hauteur_de_l_entete_est_publiee_en_variable_css(self):
+        js = Path(__file__).with_name("serve_app.js").read_text(encoding="utf-8")
+        self.assertIn('setProperty("--entete-h"', js)
+        self.assertIn("ResizeObserver", js)
 
 
 if __name__ == "__main__":

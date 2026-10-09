@@ -116,7 +116,6 @@ class Windows7BuildTests(unittest.TestCase):
         self.assertIn("certifi", requirements)
         verrouille = build.REQUIREMENTS.read_text(encoding="utf-8")
         self.assertIn("certifi==", verrouille)
-        self.assertEqual(runtime.DEPENDANCES.get("certifi"), "certifi")
 
     def test_workflows_build_both_profiles_from_main_only(self):
         workflows = Path(__file__).parent / ".github" / "workflows"
@@ -204,7 +203,7 @@ class Windows7BuildTests(unittest.TestCase):
 
     def test_update_is_disabled_without_network(self):
         with mock.patch.object(runtime, "build_windows7", return_value=True), \
-                mock.patch.object(maj, "_interroger") as interroger:
+                mock.patch.object(maj, "_ouvrir_github") as interroger:
             self.assertEqual(maj.disponible(force=True), {})
             with redirect_stdout(StringIO()) as sortie:
                 self.assertEqual(maj.installer(force=True), 0)

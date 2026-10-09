@@ -26,7 +26,7 @@ class TestsDetectionCount(unittest.TestCase):
                               + json.dumps(systems) + "}; let rafraichirVignettes = false; "
                               "const elements = {count: {}, list: {}}; const $ = k => elements[k]; "
                               "const nomsDirectsActifs = () => []; const h = v => v; "
-                              "const cameraCard = () => '';\n" + code +
+                              "const cameraCard = () => ''; const estMasquee = () => false; const comparerNoms = (a, b) => String(a).localeCompare(String(b));\n" + code +
                               "\nrenderLive(); console.log(JSON.stringify(elements.count.textContent));")
                     result = subprocess.run([node, "-"], input=script, capture_output=True,
                                             text=True, encoding="utf-8", check=True)

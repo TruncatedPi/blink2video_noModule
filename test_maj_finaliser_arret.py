@@ -1,5 +1,6 @@
 """Aucun remplacement ni redémarrage tant que l'arrêt n'est pas confirmé."""
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,20 @@ import maj
 
 
 class TestFinaliserArret(unittest.TestCase):
+    def setUp(self):
+        temporaire = tempfile.TemporaryDirectory(prefix="blink-finaliser-arret-")
+        self.addCleanup(temporaire.cleanup)
+        donnees = Path(temporaire.name) / "donnees"
+        controle = Path(temporaire.name) / "controle"
+        donnees.mkdir()
+        controle.mkdir()
+        environnement = mock.patch.dict(os.environ, {
+            "BLINK_HOME": str(donnees),
+            "BLINK_CONTROL_HOME": str(controle),
+        })
+        environnement.start()
+        self.addCleanup(environnement.stop)
+
     def executer(self, code_arret, vivants):
         fiches = [{"pid": 123, "verbes": [["serve"]]}]
         with tempfile.TemporaryDirectory() as dossier, \
@@ -28,18 +43,29 @@ class TestFinaliserArret(unittest.TestCase):
         self.assertEqual(code, 1)
         permuter.assert_not_called()
         relancer.assert_not_called()
+        travail = maj.runtime.travail_affichable()
+        self.assertEqual(travail["cle"], "phase.update_noop")
+        self.assertEqual(travail["quoi"], maj.msg("arret_echoue"))
+        self.assertTrue(travail["termine"])
+        self.assertFalse(travail["actif"])
 
     def test_arret_reussi_mais_instance_survivante_refuse_la_mise_a_jour(self):
         code, permuter, relancer = self.executer(0, [True] * 20)
         self.assertEqual(code, 1)
         permuter.assert_not_called()
         relancer.assert_not_called()
+        travail = maj.runtime.travail_affichable()
+        self.assertEqual(travail["cle"], "phase.update_noop")
+        self.assertEqual(travail["quoi"], maj.msg("instance_encore_active"))
+        self.assertTrue(travail["termine"])
+        self.assertFalse(travail["actif"])
 
     def test_arret_confirme_apres_attente_autorise_la_mise_a_jour(self):
         code, permuter, relancer = self.executer(0, [True, True, False])
         self.assertEqual(code, 0)
         permuter.assert_called_once()
         relancer.assert_called_once()
+        self.assertEqual(maj.runtime.travail_affichable(), {})
 
     def test_parent_mort_mais_enfant_ou_travailleur_survivant_refuse_la_mise_a_jour(self):
         for champ in ("enfants", "travailleurs"):

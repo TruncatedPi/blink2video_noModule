@@ -387,6 +387,45 @@ réseau local est l'usage prévu.
 </details>
 
 <details>
+<summary>Webhooks d'état et d'armement, en détail</summary>
+
+Deux routes de plus pour les scripts (domotique, un planificateur à vous), avec
+le même secret que la photo : un seul à garder en lieu sûr.
+
+- `GET /webhook/status?token=<secret>` répond avec l'état de chaque système et de
+  chaque caméra en JSON ; ajoutez `&camera=<nom>` pour une seule caméra. Chaque
+  caméra a `name`, `system`, `armed` (sa détection), `online`, `status`, `battery`
+  (un statut comme `ok`, pas un pourcentage), `battery_signal`, `voltage`,
+  `temperature_c`, `wifi`, `firmware`, `model` et `age_seconds` (l'âge du relevé).
+  Les champs sont ceux que Blink donne : une caméra qui n'en rapporte pas un
+  (une Mini sur secteur n'a pas de batterie) affiche `null`, et Blink a déjà
+  changé de tels champs, donc un script doit tolérer une valeur absente.
+- `GET` ou `POST /webhook/arm?camera=<nom>&armed=true&token=<secret>` arme ou
+  désarme une caméra ; utilisez `system=<nom>` à la place de `camera` pour un
+  système entier. `armed` accepte `true`/`false`, `1`/`0`, `on`/`off`. La réponse
+  est `{"ok": true, "requested": ..., "changed": ..., "applied": ...}` avec la
+  caméra ou le système tels que Blink les rapporte juste après. `changed` est
+  faux s'il était déjà dans l'état demandé (tel que blink2video le connaissait
+  avant l'appel) ; `applied` est faux si Blink n'avait pas encore suivi. Une
+  caméra hors ligne n'est pas tentée : vous recevez `409` avec son état et un
+  message clair, au lieu d'attendre un délai. Un nom inconnu donne `404`, un nom
+  porté par deux éléments `409`, un secret absent ou faux `403`.
+- Plusieurs caméras en un appel : répétez le paramètre,
+  `camera=Garage&camera=Grenier&armed=false`. La réponse est
+  `{"ok": ..., "scope": "cameras", "cameras": [...]}` avec un résultat par
+  caméra (son propre `ok`, `status_code`, `changed`, `applied` ou `error`),
+  toujours avec le statut `200` : une caméra hors ligne ou inconnue n'arrête pas
+  les autres, et le `ok` global n'est vrai que si toutes ont réussi.
+
+Traitez le secret comme un mot de passe : le détenir permet maintenant aussi
+d'éteindre vos caméras, pas seulement de prendre une photo. Chaque changement
+fait par le webhook d'armement est ajouté à `armement-webhook.log` dans le
+dossier de données, avec l'adresse de l'appelant. Même conseil que pour la
+photo : gardez-le sur votre réseau local.
+
+</details>
+
+<details>
 <summary>Webhook de notification, en détail</summary>
 
 Le sens inverse de celui ci-dessus, et sans rapport avec lui : un `POST`

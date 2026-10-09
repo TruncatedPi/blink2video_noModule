@@ -18,6 +18,7 @@ import os
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -32,7 +33,6 @@ import autostart
 import smoketest
 import watch
 import serve
-import raccourci_bureau
 
 
 class TestTraduireLibelles(unittest.TestCase):
@@ -151,9 +151,22 @@ class TestTraduireLibelles(unittest.TestCase):
 
     def test_maj_msg_bascule_et_formate(self):
         self._regler_langue("en")
-        self.assertEqual(
-            maj.msg("archive_chemin_dangereux", brut="../../etc/passwd"),
-            "Dangerous path in the archive: '../../etc/passwd'")
+        # Les refus d'archive viennent du commun (clé, valeurs) et redeviennent,
+        # par maj._en_langue_courante, l'OSError au texte de la langue de la page.
+        with tempfile.TemporaryDirectory() as dossier:
+            archive = Path(dossier) / "mauvaise.zip"
+            with zipfile.ZipFile(archive, "w") as sortie:
+                sortie.writestr("../../etc/passwd", b"x")
+            with self.assertRaises(OSError) as erreur:
+                maj._extraire(archive, Path(dossier) / "contenu")
+            self.assertEqual(str(erreur.exception),
+                             "Dangerous path in the archive: '../../etc/passwd'")
+            self._regler_langue("fr")
+            with self.assertRaises(OSError) as erreur:
+                maj._extraire(archive, Path(dossier) / "contenu2")
+            self.assertEqual(str(erreur.exception),
+                             "Chemin dangereux dans l'archive : '../../etc/passwd'")
+            self._regler_langue("en")
         self.assertEqual(maj.msg("deja_a_jour", version="0.12.20"),
                          "blink2video 0.12.20 is up to date.")
         self._regler_langue("fr")
@@ -224,23 +237,41 @@ class TestTraduireLibelles(unittest.TestCase):
         self._regler_langue("en")
         try:
             raise maj.RestaurationIncomplete(
-                maj.msg("maj_precedente_non_finalisee"))
+                maj.msg("maj_precedente_non_finalisee", marqueur="MARQUEUR"))
         except maj.RestaurationIncomplete as erreur:
-            self.assertEqual(
-                str(erreur),
-                "Previous update not finalized: backups and preparation kept.")
+            # Issue #95 : le message dit aussi quel fichier supprimer (le marqueur, nomme).
+            self.assertTrue(str(erreur).startswith(
+                "Previous update not finalized: backups and preparation kept."))
+            self.assertIn("delete the file MARQUEUR", str(erreur))
 
-    # Issue #16 : raccourci_bureau.py (jumeau d'autostart.py) et les messages
-    # propres à runtime.py (bootstrap, --loop) étaient restés hors traduction.
-
-    def test_raccourci_bureau_toutes_les_cles_existent_dans_les_deux_langues(self):
-        self.assertEqual(set(raccourci_bureau.LIBELLES["fr"]),
-                         set(raccourci_bureau.LIBELLES["en"]))
-
-    def test_raccourci_bureau_bascule_et_formate(self):
+    def test_issue_95_une_mise_a_jour_interrompue_est_reprise_sans_rien_supprimer(self):
+        # « I did a manual install of the latest version but now every time I try to update I
+        # get "Previous update not finalized". What do I need to delete? » : plus rien. Le
+        # nettoyage ne purge pas la sauvegarde tant que la permutation interrompue n'est pas
+        # reprise, et la permutation suivante la reprend sans toucher a la sauvegarde.
         self._regler_langue("en")
-        self.assertEqual(raccourci_bureau._("raccourci_cree", cible="X"),
-                         "Shortcut created: X")
+        with tempfile.TemporaryDirectory() as dossier:
+            racine = Path(dossier)
+            installe, neuf = racine / "installe", racine / "neuf"
+            installe.mkdir()
+            (neuf / "_internal").mkdir(parents=True)
+            (neuf / "blink2video.exe").write_bytes(b"neuf")
+            (neuf / "_internal" / "lib").write_bytes(b"lib-neuve")
+            (installe / maj.MARQUEUR_PERMUTATION).write_text("{}", encoding="utf-8")
+            (installe / "blink2video.exe.ancien").write_bytes(b"ancienne version")
+            (installe / "blink2video.exe").write_bytes(b"a moitie")
+            maj._nettoyer(installe)                                   # aucun refus
+            self.assertEqual((installe / "blink2video.exe.ancien").read_bytes(), b"ancienne version")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertTrue(maj._permuter(neuf, installe))
+            self.assertEqual((installe / "blink2video.exe").read_bytes(), b"neuf")
+            self.assertFalse((installe / maj.MARQUEUR_PERMUTATION).exists())
+            maj._nettoyer(installe)                                   # menage de la suivante
+            self.assertFalse((installe / "blink2video.exe.ancien").exists())
+            self.assertFalse((installe / "blink2video.exe.reprise").exists())
+
+    # Issue #16 : les messages propres à runtime.py (bootstrap, --loop) étaient
+    # restés hors traduction.
 
     def test_runtime_toutes_les_cles_existent_dans_les_deux_langues(self):
         self.assertEqual(set(runtime._LIBELLES_RUNTIME["fr"]),

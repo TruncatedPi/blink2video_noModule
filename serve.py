@@ -33,6 +33,8 @@ import mimetypes
 import os
 import queue
 import re
+import select
+import socket
 import subprocess
 import sys
 import tempfile
@@ -50,6 +52,8 @@ except ImportError:  # Python 3.8 (build Windows 7, voir build-win7.yml) : pas d
 
 # Avant tout import de dépendance : c'est ici qu'un environnement isolé
 # est préparé et le programme relancé dedans si nécessaire.
+from nico579_commons import serveweb
+
 import runtime
 
 LIBELLES = {
@@ -91,6 +95,12 @@ LIBELLES = {
             "Réessayez dans un instant.",
         "webhook_camera_manquante": "Paramètre « camera » manquant.",
         "webhook_jeton_invalide": "Jeton de webhook invalide ou manquant.",
+        "webhook_camera_inconnue": "Caméra inconnue : {camera}.",
+        "webhook_systeme_inconnu": "Système inconnu : {systeme}.",
+        "webhook_nom_ambigu": "Plusieurs éléments portent ce nom : {nom}. Renommez-en un dans l'application Blink.",
+        "webhook_cible": "Indiquez exactement une cible : camera ou system.",
+        "webhook_armed_invalide": "Paramètre armed attendu : true ou false.",
+        "webhook_camera_hors_ligne": "La caméra « {camera} » est hors ligne : armement non tenté.",
     },
     "en": {
         "aide_desc": "Local interface to watch Blink clips, discard some and bring them back.",
@@ -128,6 +138,12 @@ LIBELLES = {
             "Try again in a moment.",
         "webhook_camera_manquante": "Missing «camera» parameter.",
         "webhook_jeton_invalide": "Invalid or missing webhook token.",
+        "webhook_camera_inconnue": "Unknown camera: {camera}.",
+        "webhook_systeme_inconnu": "Unknown system: {systeme}.",
+        "webhook_nom_ambigu": "Several items have this name: {nom}. Rename one of them in the Blink app.",
+        "webhook_cible": "Give exactly one target: camera or system.",
+        "webhook_armed_invalide": "Parameter armed must be true or false.",
+        "webhook_camera_hors_ligne": "Camera \u201c{camera}\u201d is offline: arming not attempted.",
     },
 }
 
@@ -589,6 +605,72 @@ DOSSIER_DIRECT = runtime.dossier_sorties() / "Blink_Direct"
 # aucun, mais peut quand même répondre à une prise de vue explicite.
 DOSSIER_SNAPSHOTS = runtime.dossier_sorties() / "Blink_Snapshots"
 WEBHOOK_SNAPSHOT_ROUTE = "/webhook/snapshot"
+# Etat des cameras et armement pour les scripts (issue #40), meme secret que la
+# photo : un seul a retenir, decision de Nico et de Markus le 2026-09-30.
+WEBHOOK_STATUS_ROUTE = "/webhook/status"
+WEBHOOK_ARM_ROUTE = "/webhook/arm"
+# Un POST sur /webhook/arm n'a pas de corps utile (tout passe par l'URL) : on
+# le lit pour ne pas desynchroniser une connexion persistante, jusqu'a cette
+# taille, au-dela on ferme la connexion.
+_CORPS_WEBHOOK_MAX = 65536
+
+
+def _booleen_webhook(valeur):
+    """true/false, 1/0, on/off, yes/no, oui/non (casse indifferente), None sinon."""
+    v = (valeur or "").strip().casefold()
+    if v in ("true", "1", "on", "yes", "oui"):
+        return True
+    if v in ("false", "0", "off", "no", "non"):
+        return False
+    return None
+
+
+def _camera_pour_webhook(camera: dict, systeme) -> dict:
+    """Ce qu'un script voit d'une camera : les champs que Blink donne, tels
+    quels, et null quand une camera ne les rapporte pas (tous les modeles n'ont
+    ni batterie ni tension ni wifi). Pas de numero de serie."""
+    return {
+        "name": camera.get("name"),
+        "system": systeme,
+        "armed": camera.get("armed"),
+        "online": not camera.get("offline"),
+        "status": camera.get("status") or None,
+        "battery": camera.get("battery"),
+        "battery_signal": camera.get("battery_signal"),
+        "voltage": camera.get("voltage"),
+        "temperature_c": camera.get("temperature"),
+        "wifi": camera.get("wifi"),
+        "firmware": camera.get("firmware"),
+        "model": camera.get("model"),
+        "age_seconds": camera.get("age_seconds"),
+    }
+
+
+def etat_webhook(etat: dict, camera: str = ""):
+    """Etat des systemes et des cameras pour /webhook/status, depuis le meme
+    system_state() que la page. Avec `camera`, seulement celle-la ; None si ce
+    nom ne correspond a aucune camera."""
+    systemes = []
+    trouvee = False
+    for systeme in etat.get("systems") or []:
+        cameras = [
+            _camera_pour_webhook(c, systeme.get("name"))
+            for c in systeme.get("cameras") or []
+            if not camera or str(c.get("name") or "").strip() == camera
+        ]
+        if camera and not cameras:
+            continue
+        trouvee = trouvee or bool(cameras)
+        systemes.append({
+            "name": systeme.get("name"),
+            "armed": systeme.get("armed"),
+            "module": systeme.get("module"),
+            "firmware": systeme.get("module_firmware"),
+            "cameras": cameras,
+        })
+    if camera and not trouvee:
+        return None
+    return {"systems": systemes}
 
 
 def _chemin_enregistrement_direct(name: str) -> Path:
@@ -1621,6 +1703,42 @@ def _erreur_boucle_asyncio(loop, contexte: dict) -> None:
     _journal_direct("asyncio", f"exception non rattrapée sur BLINK.loop, {detail}")
 
 
+# Attente de la confirmation de Blink apres un armement de camera (voir
+# _confirmer_armement_camera) ; BLINK.call() borne l'ensemble a 60 s.
+DELAI_CONFIRMATION_ARMEMENT = 45
+
+
+async def _confirmer_armement_camera(blink, camera, reponse, armed: bool) -> None:
+    """Attend que Blink ait appliqué l'armement d'une caméra, puis le retient.
+
+    blinkpy poste la commande (camera.async_arm) et rend sa réponse sans la
+    suivre, et ne met pas à jour camera.motion_enabled, l'attribut que
+    describe_camera() affiche : depuis l'allègement de system_state() (le
+    2026-09-03, il ne relit plus que l'écran d'accueil et l'armement du hub),
+    cet attribut gardait sa valeur de la connexion. Armer une caméra depuis la
+    page laissait donc son bouton rouge, alors que celui du hub, relu à chaque
+    fois, passait au vert (constaté en réel le 2026-10-05, caméra « Salon »), et
+    le webhook d'état annonçait un armement périmé.
+
+    On suit donc la commande, comme reveiller_camera(), et on pose la valeur
+    confirmée. Un refus ou une absence de confirmation devient une erreur lisible
+    au lieu d'un échec silencieux."""
+    from blinkpy import api
+
+    if not isinstance(reponse, dict) or not reponse.get("id"):
+        raise RuntimeError("Blink a refusé la commande d'armement de la caméra.")
+    commande = dict(reponse)
+    commande.setdefault("network_id", camera.network_id)
+    try:
+        confirme = await asyncio.wait_for(
+            api.wait_for_command(blink, commande), DELAI_CONFIRMATION_ARMEMENT)
+    except asyncio.TimeoutError:
+        confirme = False
+    if not confirme:
+        raise RuntimeError("Blink n'a pas confirmé l'armement de la caméra.")
+    camera.motion_enabled = bool(armed)
+
+
 class BlinkSession:
     """Session Blink partagée, vivant sur sa propre boucle asyncio.
 
@@ -1982,13 +2100,6 @@ class _ReglagesInvalides(ValueError):
 _ENTREE_CONFIANCE_RE = re.compile(r"^[A-Za-z0-9._\-:\[\]/]+$")
 
 
-def _entrees_confiance(valeur: str) -> list:
-    """Entrées de trusted_host : une liste séparée par des virgules (issue
-    #13), chacune un nom d'hôte exact, une IP ou un sous-réseau CIDR. Une
-    valeur unique, la seule forme possible avant, reste une liste d'un."""
-    return [entree.strip() for entree in (valeur or "").split(",") if entree.strip()]
-
-
 def normaliser_hotes_confiance(valeur: str) -> str:
     """Valide trusted_host et le rend sous forme canonique (« a,b »), ou lève
     ValueError avec un message affichable. Appliqué à l'enregistrement depuis
@@ -1996,7 +2107,7 @@ def normaliser_hotes_confiance(valeur: str) -> str:
     version antérieure et refusé par celle-ci empêcherait sinon le serveur de
     démarrer après mise à jour. À l'usage, hote_autorise() et end_headers()
     ignorent de toute façon les entrées invalides (refus par défaut)."""
-    entrees = _entrees_confiance(valeur)
+    entrees = serveweb.entrees_confiance(valeur)
     for entree in entrees:
         # Un « - » initial n'appartient à aucun nom d'hôte ni adresse, et
         # argparse lirait « --trusted-host -x » comme une option sans valeur :
@@ -2167,7 +2278,7 @@ def _preparer_reglages_web(payload: dict) -> tuple[str, dict]:
     return dossier, reglages
 
 
-class Handler(http.server.BaseHTTPRequestHandler):
+class Handler(serveweb.Handler):
     # HTTP/1.1 pour garder la connexion ouverte : un navigateur qui se déplace
     # dans une vidéo enchaîne les requêtes Range, une par saut. En HTTP/1.0 il
     # rouvrirait une connexion à chaque fois.
@@ -2189,7 +2300,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     # ------------------------------------------------------------ protection
 
-    _HOTES_LOCAUX = ("127.0.0.1", "localhost", "::1")
+    # La garde d'hôte (Host, Origin, trusted_host en liste ou CIDR, proxy local)
+    # est celle de nico579_commons.serveweb, la même pour les quatre
+    # applications ; ne reste ici que ce qui est propre à blink2video.
+    variable_proxy_local = "BLINK_TRUSTED_LOOPBACK_PROXY"
 
     def _journaliser_acces_refuse(self, raison: str) -> None:
         """Trace un 403 de hote_autorise() dans serve_erreurs.log (même
@@ -2213,118 +2327,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     f"trusted_host configuré: {self.trusted_host!r}\n")
         except OSError:
             pass
-
-    @staticmethod
-    def _hote_correspond(hote: str, hote_confiance: str) -> bool:
-        """Vrai si `hote` (Host ou Origin, déjà réduit au hostname) est
-        couvert par l'une des entrées de `hote_confiance`.
-
-        Chaque entrée (liste séparée par des virgules, issue #13 : un seul
-        nom ou un seul sous-réseau ne suffisait pas pour mêler accès direct
-        et iframe) est soit une IP/nom d'hôte exact (comparaison de chaîne),
-        soit un sous-réseau CIDR (192.168.1.0/24, issue #10 : un client
-        Windows en DHCP n'a pas d'adresse fixe). ip_network(..., strict=False)
-        tolère aussi qu'on y colle l'adresse d'une machine du réseau plutôt
-        que l'adresse réseau elle-même (192.168.1.5/24), erreur de saisie
-        probable et sans ambiguïté sur l'intention. Jamais de ValueError
-        remontée : un hote ou un CIDR mal formé se traite comme "pas de
-        correspondance", pas comme une erreur serveur."""
-        for entree in _entrees_confiance(hote_confiance):
-            if "/" in entree:
-                try:
-                    if ipaddress.ip_address(hote) in ipaddress.ip_network(entree, strict=False):
-                        return True
-                except ValueError:
-                    continue
-            elif hote == entree:
-                return True
-        return False
-
-    def hote_autorise(self) -> bool:
-        """Faux si Host (ou Origin, quand le navigateur l'envoie) ne désigne
-        pas cette machine.
-
-        L'interface n'a pas d'authentification (40210a6, délibéré : un outil
-        personnel, pas un service multi-utilisateur) ; le seul rempart contre
-        une page tierce qui actionnerait l'API à l'insu de qui la visite est
-        de vérifier d'où vient la requête. Un client HTTP quelconque (tests,
-        `curl` local) n'envoie pas Origin : seul Host, toujours présent,
-        est alors regardé."""
-        # trusted_host (réglage web, ou --trusted-host au lancement) : usage
-        # prévu, un tunnel privé (Tailscale, WireGuard) auquel BLINK_BIND lie
-        # directement cette instance, sans reverse proxy devant pour réécrire
-        # Host - l'alternative la plus simple à ce montage restait jusqu'ici
-        # de toujours en installer un (voir le README, "Reaching it
-        # remotely"). Contrairement à BLINK_TRUSTED_LOOPBACK_PROXY (qui ne
-        # relâche que la provenance de la connexion ; Host doit rester
-        # 127.0.0.1), celui-ci relâche aussi Host lui-même : la garantie ne
-        # vient alors plus de la boucle locale, mais du réseau du tunnel -
-        # seuls ses appareils peuvent router un paquet vers cette adresse,
-        # chiffré au niveau protocole, avant même que cette fonction ne
-        # s'exécute. La page reste sans la moindre authentification propre,
-        # mais n'est jamais joignable par personne d'autre, exactement comme
-        # depuis la boucle locale. N'a de sens qu'avec BLINK_BIND réglé sur
-        # cette même adresse précise, jamais 0.0.0.0 (qui accepterait alors
-        # n'importe quelle interface, LAN compris, sous ce même Host).
-        #
-        # Sous-réseau CIDR (192.168.1.0/24 plutôt qu'une IP unique) : la
-        # garantie change de nature, elle ne vient plus de "seul ce tunnel
-        # chiffré peut router un paquet ici" mais de "seul ce réseau local
-        # peut" - tout appareil qui y est déjà, y compris un invité ou un
-        # objet connecté compromis, gagne alors le même accès sans
-        # authentification. Un choix a assumer sciemment pour un LAN
-        # domestique de confiance, jamais pour un tunnel qui doit rester
-        # aussi étroit qu'une seule machine.
-        hote_confiance = (self.trusted_host or "").strip()
-        hote = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]")
-        hote_est_local = hote in self._HOTES_LOCAUX
-        hote_est_confiance = self._hote_correspond(hote, hote_confiance)
-        if not hote_est_local and not hote_est_confiance:
-            self._journaliser_acces_refuse(
-                f"Host {hote!r} ni local, ni couvert par trusted_host {hote_confiance!r}")
-            return False
-        # Host est fourni par le client et se forge avec curl : il ne constitue
-        # pas une frontière réseau à lui seul. Hors conteneur ou tunnel de
-        # confiance, seule une vraie adresse cliente de boucle locale est
-        # admise. Le compose officiel passe par le pont Docker ; son opt-in
-        # explicite reste sûr tant que le port hôte est publié sur 127.0.0.1,
-        # comme dans docker-compose.yml.
-        client = str(getattr(self, "client_address", ("127.0.0.1", 0))[0])
-        try:
-            boucle_locale = ipaddress.ip_address(client).is_loopback
-        except ValueError:
-            boucle_locale = False
-        proxy_local = os.environ.get("BLINK_TRUSTED_LOOPBACK_PROXY") == "1"
-        if not boucle_locale and not proxy_local and not hote_est_confiance:
-            self._journaliser_acces_refuse(
-                f"ni boucle locale (IP cliente {client!r}), ni "
-                f"BLINK_TRUSTED_LOOPBACK_PROXY, ni trusted_host "
-                f"(Host {hote!r}, trusted_host {hote_confiance!r})")
-            return False
-        origine = self.headers.get("Origin")
-        if origine:
-            # Même repli fermé que boucle_locale ci-dessus (ValueError sur
-            # une adresse illisible) : urlparse lève sur certaines formes
-            # manifestement invalides (IPv6 mal fermé, ex. « http://[abc »)
-            # au lieu de rendre un hostname vide comme le reste des Origin
-            # mal formées. Trouvé en auditant la même levée sur l'URL de
-            # webhook sortant (issue #11) : un client qui forge cet en-tête
-            # faisait planter la requête (exception non rattrapée jusqu'à
-            # do_GET/do_POST) plutôt que de se la voir simplement refuser.
-            try:
-                origine_hote = urlparse(origine).hostname
-            except ValueError:
-                origine_hote = None
-            origine_ok = origine_hote is not None and (
-                origine_hote in self._HOTES_LOCAUX
-                or self._hote_correspond(origine_hote, hote_confiance)
-            )
-            if not origine_ok:
-                self._journaliser_acces_refuse(
-                    f"Origin {origine!r} (hostname {origine_hote!r}) "
-                    f"ni local, ni couvert par trusted_host {hote_confiance!r}")
-                return False
-        return True
 
     def jeton_valide(self) -> bool:
         """Le jeton de process (TOKEN) doit accompagner toute requête qui
@@ -2360,7 +2362,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # (ioBroker) était refusé, vérifié dans Chrome. Tout port de l'hôte,
         # comme hote_autorise() qui ignore déjà le port. Pas d'entrée IPv6 :
         # la syntaxe CSP n'a pas de forme pour une adresse IPv6 littérale.
-        exacts = [entree for entree in _entrees_confiance(self.trusted_host)
+        exacts = [entree for entree in serveweb.entrees_confiance(self.trusted_host)
                   if "/" not in entree and ":" not in entree
                   and _ENTREE_CONFIANCE_RE.match(entree)]
         frame_ancestors = ("'self' " + " ".join(f"{entree}:*" for entree in exacts)
@@ -2379,15 +2381,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         super().end_headers()
 
     # ------------------------------------------------------------------ envoi
-
-    def send_json(self, payload: dict, status: int = 200) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-        self.wfile.flush()
 
     def repondre_puis_redemarrer(self, commande_restart: list) -> None:
         """Détache une commande capable d'arrêter CE processus, puis confirme
@@ -2476,6 +2469,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return  # l'utilisateur a changé de clip, c'est normal
                 remaining -= len(chunk)
 
+    def _client_parti(self) -> bool:
+        """Vrai si le navigateur a déjà fermé sa connexion (requête annulée).
+
+        Une page qui défile vite libère ses lecteurs, et le navigateur annule
+        les vignettes qu'il avait demandées (359 requêtes sans statut dans le
+        test à froid de Joël, PR #59) ; le serveur ne le sait pas, fabriquait
+        quand même chacune par ffmpeg, et ces requêtes gardaient leur place
+        dans la file des extractions. Un octet lisible qui est la requête
+        suivante d'une connexion persistante n'est pas un départ : seul un
+        flux fermé (lecture vide) l'est."""
+        try:
+            lisibles, _, _ = select.select([self.connection], [], [], 0)
+            if not lisibles:
+                return False
+            return self.connection.recv(1, socket.MSG_PEEK) == b""
+        except (OSError, ValueError, TypeError, AttributeError):
+            return True
+
     def send_thumb(self, route: str, source: Path) -> None:
         """Sert la miniature d'un clip, en la fabriquant à la première demande.
 
@@ -2507,25 +2518,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     # toutes les vignettes de la page d'un coup, et autant de
                     # ffmpeg simultanés saturerait la machine pour rien.
                     with THUMB_SLOTS:
-                        runtime.lancer(
-                            [self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-                             # -ss avant -i : ffmpeg saute directement à la position
-                             # demandée au lieu de décoder tout ce qui précède.
-                             "-ss", "1.5", "-i", str(source), "-frames:v", "1",
-                             "-vf", "scale=480:-2", "-q:v", "5", str(pending)],
-                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL, check=False,
-                        )
-                        if not pending.is_file() or pending.stat().st_size == 0:
-                            # Clip plus court que la position demandée : on se
-                            # rabat sur la toute première image.
-                            runtime.lancer(
-                                [self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-                                 "-i", str(source), "-frames:v", "1",
-                                 "-vf", "scale=480:-2", "-q:v", "5", str(pending)],
-                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL, check=False,
-                            )
+                        # Après l'attente du créneau, avant le travail : le
+                        # client a pu partir pendant la file (voir _client_parti).
+                        if self._client_parti():
+                            self.close_connection = True
+                            return
+                        md.extraire_vignette(self.ffmpeg, source, pending)
                     if not pending.is_file() or pending.stat().st_size == 0:
                         pending.unlink(missing_ok=True)
                         self.send_error(404)
@@ -2757,7 +2755,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         pass
                     return
                 _, camera = BLINK.find_camera(_blink, identity)
-                await camera.async_arm(armed)
+                reponse = await camera.async_arm(armed)
+                await _confirmer_armement_camera(_blink, camera, reponse, armed)
                 camera.motion_enabled = armed
             return run()
 
@@ -2973,6 +2972,154 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_json({"error": str(erreur)}, 409)
         except Exception as erreur:
             self.send_json({"error": f"{type(erreur).__name__}: {erreur}"}, 503)
+
+    def _secret_webhook_valide(self, requete: dict) -> bool:
+        """Meme secret que le webhook de photo, compare en temps constant (en
+        octets : un jeton non ASCII ne doit pas lever TypeError)."""
+        fourni = (requete.get("token") or [""])[0].encode("utf-8")
+        attendu = runtime.lire_jeton_webhook().encode("utf-8")
+        return bool(attendu) and hmac.compare_digest(fourni, attendu)
+
+    def _etat_pour_webhook(self):
+        """system_state() ou (None, message) : jamais une exception."""
+        try:
+            etat = self.system_state()
+        except Exception as erreur:
+            return None, f"{type(erreur).__name__}: {erreur}"
+        if isinstance(etat, dict) and etat.get("error"):
+            return None, str(etat["error"])
+        return etat, ""
+
+    def gerer_webhook_status(self) -> None:
+        """Etat des cameras en JSON pour un script (issue #40) : en ligne,
+        armee, batterie, temperature, wifi, firmware, modele. Meme authentification
+        que gerer_webhook_snapshot(), avant les gardes-fous du navigateur."""
+        requete = parse_qs(urlparse(self.path).query)
+        if not self._secret_webhook_valide(requete):
+            self.send_error(403)
+            return
+        camera = (requete.get("camera") or [""])[0].strip()
+        etat, erreur = self._etat_pour_webhook()
+        if etat is None:
+            self.send_json({"error": erreur}, 503)
+            return
+        reponse = etat_webhook(etat, camera)
+        if reponse is None:
+            self.send_json({"error": msg("webhook_camera_inconnue", camera=camera)}, 404)
+            return
+        self.send_json(reponse)
+
+    def gerer_webhook_arm(self) -> None:
+        """Arme ou desarme une camera ou un systeme depuis un script (issue
+        #40) : /webhook/arm?camera=<nom>|system=<nom>&armed=true|false&token=...
+
+        Une camera hors ligne n'est pas tentee : la reponse rend son etat et une
+        erreur nette plutot que d'attendre le delai d'une commande qui ne
+        reviendra pas. Chaque changement est journalise (armement-webhook.log)
+        avec l'adresse de l'appelant : desarmer des cameras a distance est plus
+        sensible qu'une photo."""
+        if self.command == "POST":
+            try:
+                longueur = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                longueur = 0
+            if longueur > _CORPS_WEBHOOK_MAX:
+                self.close_connection = True
+            elif longueur > 0:
+                self.rfile.read(longueur)
+        requete = parse_qs(urlparse(self.path).query)
+        if not self._secret_webhook_valide(requete):
+            self.send_error(403)
+            return
+        # Plusieurs caméras d'un coup en répétant le paramètre (camera=A&camera=B,
+        # issue #40) ; les doublons ne sont armés qu'une fois.
+        cameras = list(dict.fromkeys(
+            nom.strip() for nom in requete.get("camera") or [] if nom.strip()))
+        systeme = (requete.get("system") or [""])[0].strip()
+        if bool(cameras) == bool(systeme):
+            self.send_json({"error": msg("webhook_cible")}, 400)
+            return
+        voulu = _booleen_webhook((requete.get("armed") or [""])[0])
+        if voulu is None:
+            self.send_json({"error": msg("webhook_armed_invalide")}, 400)
+            return
+        etat, erreur = self._etat_pour_webhook()
+        if etat is None:
+            self.send_json({"error": erreur}, 503)
+            return
+        if systeme:
+            corps, code = self._armer_une_cible(etat, "system", systeme, voulu)
+            self.send_json(corps, code)
+            return
+        if len(cameras) == 1:
+            corps, code = self._armer_une_cible(etat, "camera", cameras[0], voulu)
+            self.send_json(corps, code)
+            return
+        # Une réponse par caméra : une caméra hors ligne ou inconnue n'empêche pas
+        # les autres. « ok » global n'est vrai que si toutes ont réussi.
+        resultats = []
+        for nom in cameras:
+            corps, code = self._armer_une_cible(etat, "camera", nom, voulu)
+            resultat = {"name": nom, "status_code": code}
+            resultat.update(corps)
+            resultat["ok"] = code == 200
+            resultats.append(resultat)
+        self.send_json({"ok": all(r["ok"] for r in resultats), "scope": "cameras",
+                        "requested": voulu, "cameras": resultats})
+
+    def _armer_une_cible(self, etat: dict, portee: str, nom: str, voulu: bool):
+        """Arme ou désarme une caméra ou un système nommé ; rend (réponse, code HTTP).
+
+        `changed` dit si l'état connu de blink2video avant l'appel était différent
+        de la demande ; `applied`, si l'état relu après l'appel correspond à la
+        demande (pour une caméra, blink2video suit la commande jusqu'à ce que Blink
+        la confirme)."""
+        if portee == "camera":
+            candidats = [(s, c) for s in etat.get("systems") or [] for c in s.get("cameras") or []
+                         if str(c.get("name") or "").strip() == nom]
+        else:
+            candidats = [(s, None) for s in etat.get("systems") or []
+                         if str(s.get("name") or "").strip() == nom]
+        if not candidats:
+            cle = "webhook_camera_inconnue" if portee == "camera" else "webhook_systeme_inconnu"
+            return {"error": msg(cle, camera=nom, systeme=nom)}, 404
+        if len(candidats) > 1:
+            return {"error": msg("webhook_nom_ambigu", nom=nom)}, 409
+        systeme_trouve, camera_trouvee = candidats[0]
+        if camera_trouvee is not None and camera_trouvee.get("offline"):
+            return {
+                "error": msg("webhook_camera_hors_ligne", camera=nom),
+                "camera": _camera_pour_webhook(camera_trouvee, systeme_trouve.get("name")),
+            }, 409
+        cible = camera_trouvee or systeme_trouve
+        avant = cible.get("armed")
+        try:
+            self.set_armed(portee, cible["key"], voulu)
+        except RuntimeError as erreur_blink:
+            return {"error": str(erreur_blink)}, 503
+        except Exception as erreur_blink:
+            return {"error": f"{type(erreur_blink).__name__}: {erreur_blink}"}, 503
+        horodatage = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        client = self.client_address[0] if getattr(self, "client_address", None) else "?"
+        runtime.ajouter_ligne(
+            "armement-webhook.log",
+            f"{horodatage} {portee} \u00ab {nom} \u00bb armed={str(voulu).lower()} depuis {client}")
+        reponse = {"ok": True, "scope": portee, "requested": voulu,
+                   "changed": None if avant is None else bool(avant) != voulu}
+        apres, _erreur = self._etat_pour_webhook()
+        if apres is not None:
+            if portee == "camera":
+                lu = etat_webhook(apres, nom)
+                if lu:
+                    reponse["camera"] = lu["systems"][0]["cameras"][0]
+                    reponse["applied"] = reponse["camera"]["armed"] == voulu
+            else:
+                courant = next((s for s in apres.get("systems") or []
+                                if str(s.get("name") or "").strip() == nom), None)
+                if courant is not None:
+                    reponse["system"] = {"name": courant.get("name"), "armed": courant.get("armed")}
+                    reponse["applied"] = courant.get("armed") == voulu
+        return reponse, 200
 
     def send_camera_thumb(self, identity: str, refresh: bool = False) -> None:
         """Sert la dernière vignette connue d'une caméra.
@@ -3809,6 +3956,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # GitHub #9). gerer_webhook_snapshot() a son propre secret,
             # indépendant, jamais examiné par ces deux fonctions.
             self.gerer_webhook_snapshot()
+            return
+        if route == WEBHOOK_STATUS_ROUTE:
+            self.gerer_webhook_status()
+            return
+        if route == WEBHOOK_ARM_ROUTE:
+            self.gerer_webhook_arm()
             return
         if not self.hote_autorise():
             self.send_error(403)
@@ -4678,6 +4831,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_error(code)
 
     def do_POST(self):
+        # Meme raison que do_GET : un appelant externe (script de domotique)
+        # n'a ni l'origine ni le jeton de session, le secret du webhook suffit.
+        try:
+            route_webhook = urlparse(self.path).path
+        except ValueError:
+            route_webhook = ""
+        if route_webhook == WEBHOOK_ARM_ROUTE:
+            self.gerer_webhook_arm()
+            return
         if not self.hote_autorise() or not self.jeton_valide():
             self._refuser(403)
             return
@@ -4936,6 +5098,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not neuve:
                 self.send_json({"error": "Aucune version plus récente."}, 409)
                 return
+            if not runtime.effacer_conclusion_travail("phase.update_noop"):
+                self.send_json({"error": "La conclusion de la mise à jour précédente est encore occupée. Réessayez."}, 409)
+                return
             # Détaché, et volontairement sans attendre : ce processus fait
             # partie de ce que la mise à jour va arrêter. Elle rend compte dans
             # maj.log, et la page attend simplement le retour du serveur.
@@ -5113,6 +5278,25 @@ __CSS__
     <label id="autoLabel" data-i18n-title="reglages.auto.title" title="Recharger la liste dès que des clips arrivent">
       <input type="checkbox" id="auto"> <span data-i18n="reglages.auto">Actualisation automatique de la page</span>
     </label>
+    <div class="champCadence">
+      <label for="tailleCartes" data-i18n="reglages.tailleCartes">Taille des vignettes</label>
+      <select id="tailleCartes">
+        <option value="petites" data-i18n="reglages.tailleCartes.petites">Petites</option>
+        <option value="moyennes" data-i18n="reglages.tailleCartes.moyennes">Moyennes</option>
+        <option value="grandes" data-i18n="reglages.tailleCartes.grandes">Grandes</option>
+        <option value="tres_grandes" data-i18n="reglages.tailleCartes.tres_grandes">Très grandes</option>
+      </select>
+    </div>
+    <label id="barrePaginationLabel" data-i18n-title="reglages.barrePagination.title"
+           title="Masquée, la barre du bas de la liste reste disponible pour changer de page. Propre à ce navigateur.">
+      <input type="checkbox" id="barrePagination"> <span data-i18n="reglages.barrePagination">Afficher la barre de
+      pagination en haut de la liste</span>
+    </label>
+    <fieldset>
+      <legend data-i18n="reglages.masquees">Caméras masquées</legend>
+      <p class="sub tiny" data-i18n="reglages.masquees.hint">Une caméra masquée disparaît des listes de cette page mais continue d'enregistrer et de télécharger. Réglage propre à ce navigateur.</p>
+      <div id="camerasMasqueesListe" class="ligneCoches sub tiny"></div>
+    </fieldset>
     <div class="champCadence">
       <label for="port" data-i18n="reglages.serveur">Port du serveur</label>
       <input type="number" id="port" min="1" max="65535" step="1">
@@ -5339,6 +5523,9 @@ __CSS__
   <label id="outLabel">
     <input type="checkbox" id="showOut"> <span data-i18n="reglages.showOut">Voir les clips écartés</span>
   </label>
+  <label id="hiddenLabel" hidden>
+    <input type="checkbox" id="showHidden"> <span data-i18n="filtre.showHidden">Afficher les caméras masquées</span>
+  </label>
   <div id="periodeSection">
     <p class="sub tiny" data-i18n="range.title">Période</p>
     <div class="presets">
@@ -5482,16 +5669,15 @@ def veiller_sur_les_versions() -> None:
     secondes à répondre, ou ne pas répondre du tout, et rien de tout cela ne
     doit se voir depuis l'interface. Une visite par heure (maj.FRAICHEUR) :
     à six heures, une publication pouvait attendre une demi-journée avant
-    d'apparaître (issue #35)."""
-    def veille():
-        while True:
-            try:
-                maj.disponible()
-            except Exception:      # une panne de réseau n'arrête pas le serveur
-                pass
-            time.sleep(maj.FRAICHEUR)
-
-    threading.Thread(target=veille, daemon=True).start()
+    d'apparaître (issue #35). La boucle est celle du commun (Verificateur.veiller),
+    la même pour les quatre applications : elle ne redemande pas une réponse
+    encore fraîche, celle du cache disque d'un démarrage récent."""
+    if runtime.build_windows7():
+        return             # pas de mise à jour automatique pour cette édition
+    try:
+        maj._verificateur().veiller()
+    except Exception:      # une panne n'arrête pas le serveur
+        pass
 
 
 def main() -> int:

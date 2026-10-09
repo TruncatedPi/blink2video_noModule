@@ -7,6 +7,8 @@ connaît rien de la CLI ni de la session, qui lui sont fournies toutes faites.""
 import asyncio
 import copy
 import datetime as dt
+import functools
+import os
 import time
 from pathlib import Path
 from typing import NamedTuple
@@ -178,6 +180,7 @@ LIBELLES = {
         "cloud_indisponible": "  Cloud indisponible : {type}: {erreur}",
         "usb_echec": "    Échec de l’acquisition (exception : {type}).",
         "usb_echec_etape": "    Échec de l’acquisition : étape={etape}, statut HTTP={statut}.",
+        "usb_echec_raison": "    Raison du refus de la validation : {raison}.",
         "sync_suppression_impossible":
             "    ! Suppression impossible sur le Sync Module ({type}) ; "
             "clip conservé là-bas.",
@@ -218,6 +221,7 @@ LIBELLES = {
         "cloud_indisponible": "  Cloud unavailable: {type}: {erreur}",
         "usb_echec": "    Acquisition failed (exception: {type}).",
         "usb_echec_etape": "    Acquisition failed: stage={etape}, HTTP status={statut}.",
+        "usb_echec_raison": "    Why validation refused the file: {raison}.",
         "sync_suppression_impossible":
             "    ! Could not delete from the Sync Module ({type}); "
             "clip kept there.",
@@ -367,6 +371,19 @@ def _signaler_echec_acquisition(etape: str, erreur=None) -> None:
         pass
 
 
+def _signaler_raison_validation(chemin: Path) -> None:
+    """Dit POURQUOI la validation d'un clip a échoué (issue #49).
+
+    Sans cela, « étape=validation » ne distingue pas un fichier tronqué d'une
+    sonde absente ou d'une ligne que ffprobe refuse. La raison est nettoyée de
+    tout chemin et nom de clip (voir merge_daily.raison_refus_mp4) : ce
+    journal finit collé dans des issues publiques."""
+    try:
+        print(msg("usb_echec_raison", raison=md.raison_refus_mp4(chemin)), flush=True)
+    except Exception:
+        pass
+
+
 async def download_clip(blink: Blink, clip, target: Path, overwrite: bool) -> str:
     """Prépare puis télécharge un clip, sans jamais le supprimer du hub.
 
@@ -403,6 +420,8 @@ async def download_clip(blink: Blink, clip, target: Path, overwrite: bool) -> st
         # ftyp/moov intact ne suffit pas si mdat a été écourté en transit.
         if not partial.exists() or not md.valid_mp4_complet(partial):
             _signaler_echec_acquisition(etape)
+            if partial.exists():
+                _signaler_raison_validation(partial)
             return "failed"
         etape = "local"
         partial.replace(target)
@@ -516,6 +535,74 @@ async def _inventorier_cloud(blink: Blink, args, output: Path,
     )
 
 
+JOURNAL_TELECHARGEMENTS = "telechargements.log"
+
+# Vignettes à fabriquer à l'arrivée des clips (voir _preparer_vignettes) : au
+# plus ce nombre par passage ; le reste, par exemple un premier téléchargement
+# de plusieurs centaines de clips, se fabrique à la demande de la page comme
+# avant, sans retarder la notification.
+MAX_VIGNETTES_PAR_PASSAGE = 40
+_VIGNETTES_EN_ATTENTE: list = []
+
+
+@functools.lru_cache(maxsize=1)
+def _ffmpeg_pour_vignettes():
+    try:
+        return md.find_ffmpeg()
+    except RuntimeError:
+        return None
+
+
+def _journaliser_telechargement(source: str, target: Path, output: Path) -> None:
+    """Une ligne par clip téléchargé : de quoi dire, après coup, ce qu'une
+    notification « N nouveaux clips » annonçait vraiment.
+
+    Heure, source (usb ou cloud), chemin relatif au dossier des clips et taille :
+    ni URL ni identifiant de compte. Jamais fatal (runtime.ajouter_ligne)."""
+    try:
+        nom = target.relative_to(output).as_posix()
+    except ValueError:
+        nom = target.name
+    try:
+        taille = target.stat().st_size
+    except OSError:
+        taille = 0
+    moment = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    runtime.ajouter_ligne(JOURNAL_TELECHARGEMENTS, f"{moment}  {source}  {nom}  {taille} o")
+    _VIGNETTES_EN_ATTENTE.append((target, output))
+
+
+def _preparer_vignettes() -> None:
+    """Fabrique la vignette des clips qui viennent d'arriver, au même endroit et
+    sous le même nom que serve.py : la page les trouve déjà prêtes au lieu de
+    lancer un ffmpeg par clip à l'ouverture de la galerie (test à froid de
+    Joël, PR #59 : 2 672 lancements pour 2 672 clips).
+
+    Jamais fatale : une vignette manquante se fabrique à la demande, comme
+    avant. Le dossier est celui de serve.py par défaut (à côté du dossier des
+    clips) ; avec une option --thumbs personnalisée, la vignette faite ici est
+    simplement inutilisée. Une vignette plus ancienne que la version normalisée
+    du clip, faite plus tard, est refaite par serve.py."""
+    en_attente = _VIGNETTES_EN_ATTENTE[:MAX_VIGNETTES_PAR_PASSAGE]
+    del _VIGNETTES_EN_ATTENTE[:]
+    ffmpeg = _ffmpeg_pour_vignettes() if en_attente else None
+    if not ffmpeg:
+        return
+    for target, output in en_attente:
+        try:
+            identite = md.clip_identity(output, target)
+            vignette = (output.parent / ".blink_thumbs" / "clip" / identite).with_suffix(".jpg")
+            vignette.parent.mkdir(parents=True, exist_ok=True)
+            provisoire = vignette.with_name(f"{vignette.stem}.{os.getpid()}.tmp.jpg")
+            try:
+                if md.extraire_vignette(ffmpeg, target, provisoire, timeout=60):
+                    provisoire.replace(vignette)
+            finally:
+                provisoire.unlink(missing_ok=True)
+        except Exception:
+            continue
+
+
 def _suppression_auto_autorisee(sync, clip) -> bool:
     """Relit le choix après la copie locale, juste avant l'appel distant.
 
@@ -608,6 +695,7 @@ async def _telecharger_cloud(blink: Blink, args, output: Path, state: dict,
                     consommees.add(cle_cloud)
                     downloaded += 1
                     resultat = "downloaded"
+                    _journaliser_telechargement("cloud", target, output)
                     runtime.notifier_nouveau_media(clip.name, target, "clip")
                     if _suppression_auto_autorisee(sync, clip):
                         if await clip.delete_video(blink):
@@ -984,6 +1072,7 @@ async def un_passage(blink: Blink, args, modules: list) -> int:
                             state, plan.sync, plan.nom, clip, output, target,
                         )
                         blink_registre.save_download_state(output, state)
+                        _journaliser_telechargement("usb", target, output)
                         runtime.notifier_nouveau_media(clip.name, target, "clip")
                         if _suppression_auto_autorisee(plan.sync, clip):
                             # La copie locale est déjà valide et inscrite. Une
@@ -1054,6 +1143,11 @@ async def un_passage(blink: Blink, args, modules: list) -> int:
     progression.finir()
 
     if args.command == "download":
+        # Les vignettes avant la notification : le clic sur le toast ouvre la
+        # page, qui doit les trouver prêtes. Hors du fil de la boucle (ffmpeg
+        # bloque) ; run_in_executor plutôt que asyncio.to_thread, absent de
+        # Python 3.8 (édition Windows 7).
+        await asyncio.get_running_loop().run_in_executor(None, _preparer_vignettes)
         # Ligne de synthèse, toutes sources confondues.
         print(msg("nouveaux_clips", n=neufs_total))
         runtime.marquer("download")
@@ -1065,6 +1159,11 @@ async def un_passage(blink: Blink, args, modules: list) -> int:
             # doit parler la même langue que ce que l'utilisateur a choisi.
             cle = "notif_corps_singulier" if neufs_total == 1 else "notif_corps_pluriel"
             corps = msg(cle, n=neufs_total)
+            runtime.ajouter_ligne(
+                JOURNAL_TELECHARGEMENTS,
+                f"{dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  notification  "
+                f"{neufs_total} clip(s) annoncé(s)",
+            )
             # Le port configuré, pas 8765 en dur : sans ça, la notification
             # pointait vers la mauvaise page dès que l'utilisateur changeait
             # de port dans les réglages (revue du 27/08, bug 5).

@@ -21,7 +21,6 @@ from __future__ import annotations  # Python 3.8 (build Windows 7) : les annotat
 
 import argparse
 import contextlib
-import importlib.util
 import json
 import os
 import secrets
@@ -34,12 +33,14 @@ import urllib.request
 from pathlib import Path
 from typing import NamedTuple
 
+import _amorcage
+
 
 # Version de l'outil, et seule source de l'étiquette de publication : le
 # workflow de release refuse une étiquette qui ne lui correspond pas. Un binaire
 # doit pouvoir dire ce qu'il est, ne serait-ce que pour qu'un rapport de bogue
 # soit exploitable.
-VERSION = "0.15.8"
+VERSION = "0.22.0"
 WINDOWS7_BUILD_MARKER = "windows7-build.txt"
 
 
@@ -233,17 +234,20 @@ def lire_reglages() -> dict:
 def _ecrire_texte_atomique(cible: Path, contenu: str) -> None:
     """Remplace un petit fichier UTF-8 après écriture complète à côté de lui.
 
-    Le temporaire est propre à chaque appel, y compris dans un même processus.
-    L'appelant conserve la création des dossiers, la sérialisation et les
-    verrous de transaction : un replace atomique ne protège pas à lui seul
-    une lecture-modification-écriture concurrente. Les erreurs remontent.
+    Temporaire propre à chaque appel, y compris dans un même processus, et
+    remplacement qui retente un refus passager de Windows (antivirus,
+    indexeur) : nico579_commons.atomique, la même pour les quatre
+    applications. L'appelant conserve la création des dossiers, la
+    sérialisation et les verrous de transaction : un replace atomique ne
+    protège pas à lui seul une lecture-modification-écriture concurrente. Les
+    erreurs remontent.
     """
-    import uuid
+    from nico579_commons import atomique
 
-    temporaire = cible.with_name(f".{cible.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+    temporaire = atomique.chemin_part(cible)
     try:
         temporaire.write_text(contenu, encoding="utf-8")
-        temporaire.replace(cible)
+        atomique.remplacer(temporaire, cible)
     finally:
         temporaire.unlink(missing_ok=True)
 
@@ -352,20 +356,12 @@ def traduire(libelles: dict, cle: str, **valeurs) -> str:
 # n'utilise que la stdlib et retombe sur « fr » si rien n'est encore écrit.
 _LIBELLES_RUNTIME = {
     "fr": {
-        "dependances_absentes": "Dépendances absentes : {liste}",
-        "creation_venv": "Création de l'environnement isolé dans {dossier}...",
-        "relance_venv": "Relance dans {dossier}...",
-        "installation": "Installation de : {liste}",
         "repetition": "Répétition toutes les {minutes} min. Ctrl+C pour arrêter.",
         "tour_interrompu": "Tour interrompu par une erreur, nouvel essai au prochain : {erreur}",
         "arret": "\nArrêt.",
         "aide_loop": "répéter toutes les N minutes au lieu d'agir une fois (défaut 10)",
     },
     "en": {
-        "dependances_absentes": "Missing dependencies: {liste}",
-        "creation_venv": "Creating the isolated environment in {dossier}...",
-        "relance_venv": "Relaunching in {dossier}...",
-        "installation": "Installing: {liste}",
         "repetition": "Repeating every {minutes} min. Ctrl+C to stop.",
         "tour_interrompu": "Run interrupted by an error, retrying next time: {erreur}",
         "arret": "\nStopped.",
@@ -558,35 +554,6 @@ DELEGUES = {nom: verbe.module for nom, verbe in VERBES.items()
             if verbe.module != ENTREE}
 
 
-DEPENDANCES = {
-    "aiohttp": "aiohttp",
-    "blinkpy": "blinkpy",
-    # blink_auth complète le magasin TLS système avec ces racines à jour.
-    "certifi": "certifi",
-    # Windows n'embarque aucune base de fuseaux horaires : sans ce paquet,
-    # ZoneInfo("Europe/Paris") échoue et tout l'horodatage avec.
-    "tzdata": "tzdata",
-    # find_ffmpeg() (merge_daily.py) s'en sert par défaut, pour ne pas
-    # dépendre d'un ffmpeg déjà présent sur la machine (revue du 27/08,
-    # bug 4 : absent d'ici jusque-là, alors que requirements.in l'a
-    # toujours listé).
-    "imageio_ffmpeg": "imageio-ffmpeg",
-    # Dossier d'état standard de l'OS (app_dir) : même convention que
-    # lidar2map et watch2notif.
-    "platformdirs": "platformdirs",
-    # Briques communes aux quatre applications : ici la sortie du service
-    # systemd (autostart.py). Sans l'extra « tray », elle n'exige rien de plus
-    # que la bibliothèque standard : l'icône reste facultative depuis les
-    # sources. Même fourchette que requirements.in.
-    "nico579_commons": "nico579-commons>=0.3.2,<0.4",
-}
-if sys.version_info < (3, 9):
-    # zoneinfo est stdlib depuis 3.9 ; en dessous (édition Windows 7,
-    # Python 3.8), backports.zoneinfo le fournit - même condition que
-    # requirements.in.
-    DEPENDANCES["backports.zoneinfo"] = "backports.zoneinfo"
-
-
 def extraire_mode_bootstrap(argv: list) -> list:
     """Retire --bootstrap=... de `argv` s'il y est, et reporte sa valeur dans
     la variable d'environnement BLINK_BOOTSTRAP. Renvoie `argv` sans lui.
@@ -615,81 +582,34 @@ def bootstrap() -> None:
     de blinkpy : c'est le problème de l'œuf et de la poule, on ne peut pas
     vérifier des dépendances après avoir échoué à les importer.
 
-    Trois modes, choisis par --bootstrap= ou par la variable BLINK_BOOTSTRAP :
-      auto (défaut) : venv dans ~/.blink2video/venv, créé au besoin, puis relance
+    Le moteur est _amorcage.py, copie octet pour octet de
+    nico579_commons.amorcage, commun aux quatre applications (il tourne avant
+    l'installation de la bibliothèque commune, qu'il ne peut donc pas importer :
+    test_amorcage_commun.py compare les deux). Les dépendances sont celles de
+    requirements.in, installées depuis le verrou requirements.txt ; il n'y a
+    plus de seconde liste ici. Sous Python 3.8 (édition Windows 7), le verrou,
+    compilé pour 3.11, ne s'applique pas : on installe requirements.in.
+
+    Quatre modes, choisis par --bootstrap= ou par la variable BLINK_BOOTSTRAP :
+      auto (défaut) : venv dans ~/.blink2video/venv, créé au besoin, puis relance ;
+                      si les dépendances sont déjà là et qu'aucun venv n'existe
+                      (une image Docker), l'environnement courant suffit
+      force         : comme auto, même si un autre environnement est actif
       pip           : installation dans l'environnement courant
       none          : aucune installation, on vérifie et on explique
 
     Sans effet dans un bundle, qui embarque déjà tout."""
-    if frozen() or os.environ.get("BLINK_BOOTSTRAP_DONE"):
+    if frozen():
         return
-
     sys.argv[1:] = extraire_mode_bootstrap(sys.argv[1:])
-    mode = os.environ.get("BLINK_BOOTSTRAP", "auto")
-
-    manquantes = [pip for module, pip in DEPENDANCES.items()
-                  if importlib.util.find_spec(module) is None]
-
-    if mode == "none":
-        if manquantes:
-            print(_msg("dependances_absentes", liste=", ".join(manquantes)))
-            # Entre guillemets quand la ligne porte une fourchette : collée
-            # telle quelle dans un shell, « < » et « > » redirigeraient.
-            print("  pip install " + " ".join(
-                f'"{pip}"' if set(pip) & set("<>") else pip for pip in manquantes))
-            sys.exit(1)
-        return
-
-    if mode == "pip":
-        if manquantes:
-            _installer(sys.executable, manquantes)
-        return
-
-    venv_dir = Path.home() / ".blink2video" / "venv"
-    python = venv_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-
-    # Déjà dans le bon environnement : on continue, sans quoi on se relancerait
-    # indéfiniment.
-    if Path(sys.prefix).resolve() == venv_dir.resolve():
-        if manquantes:
-            _installer(sys.executable, manquantes)
-        return
-
-    if not manquantes and not venv_dir.exists():
-        return  # l'environnement courant suffit, inutile d'en créer un
-
-    if not python.exists():
-        print(_msg("creation_venv", dossier=venv_dir))
-        subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True)
-
-    if not _venv_a_jour(python):
-        _installer(str(python), list(DEPENDANCES.values()))
-
-    print(_msg("relance_venv", dossier=venv_dir))
-    os.execve(str(python), [str(python), *sys.argv],
-              dict(os.environ, BLINK_BOOTSTRAP_DONE="1"))
+    amorcage().lancer()
 
 
-def _venv_a_jour(python: Path) -> bool:
-    """Vrai si l'interpréteur du venv importe déjà toutes les dépendances.
-
-    Un venv créé par une version plus ancienne du programme peut avoir pris
-    forme sans jamais recevoir un paquet ajouté depuis (ex. imageio-ffmpeg,
-    revue du 27/08, bug 4) : sans cette vérification à chaque relance,
-    _installer() n'était appelé qu'à la création, jamais pour réparer un
-    venv déjà là mais incomplet. Interroger le venv lui-même (plutôt que de
-    ne comparer qu'une liste) reste vrai même après une install manuelle ou
-    un pip cassé dans ce venv précis."""
-    verif = "import " + ", ".join(DEPENDANCES.keys())
-    resultat = subprocess.run([str(python), "-c", verif],
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                              check=False)
-    return resultat.returncode == 0
-
-
-def _installer(python: str, paquets: list) -> None:
-    print(_msg("installation", liste=", ".join(paquets)))
-    subprocess.run([python, "-m", "pip", "install", "--quiet", *paquets], check=True)
+def amorcage() -> "_amorcage.Amorcage":
+    return _amorcage.Amorcage(
+        "blink2video", Path(__file__).resolve().parent, variable="BLINK_BOOTSTRAP",
+        verrou=None if sys.version_info < (3, 9) else "requirements.txt",
+        reutiliser_environnement=True, langue=lire_langue)
 
 
 def frozen() -> bool:
@@ -1765,31 +1685,6 @@ def flags_enfant() -> int:
     return 0 if console_disponible() else SANS_FENETRE
 
 
-def retablir_environnement_systeme() -> None:
-    """Rend aux programmes du système le LD_LIBRARY_PATH d'origine.
-
-    Sous Linux, le lanceur de PyInstaller préfixe cette variable du dossier
-    du bundle (_internal) et garde l'ancienne valeur dans
-    LD_LIBRARY_PATH_ORIG. Tout enfant en hérite : systemctl, xdg-open ou
-    notify-send chargeaient alors nos bibliothèques au lieu des leurs, et le
-    systemd de Debian Trixie, lié à OpenSSL 3.4, refusait la libcrypto du
-    bundle (issue #23). C'est le rétablissement que recommande PyInstaller
-    pour les programmes externes, fait une fois pour tous, navigateur ouvert
-    par webbrowser compris. Ce processus-ci n'en dépend plus : le chargeur
-    ne lit la variable qu'au démarrage. Nos propres verbes relancés non
-    plus, leur lanceur la préfixe de nouveau pour eux.
-    https://pyinstaller.org/en/stable/runtime-information.html#ld-library-path-libpath-considerations
-    """
-    if not frozen() or sys.platform in ("win32", "darwin"):
-        return
-    origine = os.environ.get("LD_LIBRARY_PATH_ORIG")
-    if origine is not None:
-        os.environ["LD_LIBRARY_PATH"] = origine
-    else:
-        # Variable absente avant le lanceur : il n'a rien gardé à rétablir.
-        os.environ.pop("LD_LIBRARY_PATH", None)
-
-
 def debloquer_sigterm() -> None:
     """Lève un blocage de SIGTERM hérité du processus qui nous a lancé.
 
@@ -1802,7 +1697,13 @@ def debloquer_sigterm() -> None:
         signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
 
 
-retablir_environnement_systeme()
+if frozen():
+    # LD_LIBRARY_PATH rendu aux programmes du système (issue #23) : voir
+    # nico579_commons.environnement. Importé seulement ici : depuis les sources,
+    # le commun n'est installé qu'après ce module (bootstrap des dépendances),
+    # et la fonction ne fait de toute façon rien hors bundle.
+    from nico579_commons import environnement
+    environnement.retablir_environnement_systeme()
 debloquer_sigterm()
 
 
@@ -2284,60 +2185,34 @@ def _fichier_travail(pid: int | None = None) -> Path:
 def _verrou_travail(cible: Path, attente: float = 0.25):
     """Courte exclusion entre publication et purge, sans sondage de processus.
 
-    Le fichier reste en place : le supprimer après déverrouillage permettrait
-    à deux processus de verrouiller deux fichiers différents au même chemin.
-    Le verrou OS est libéré même si son détenteur s'arrête brutalement.
+    Verrou de nico579_commons.atomique, sur le fichier voisin
+    « .blink_travail.lock » : il reste en place (le supprimer après
+    déverrouillage permettrait à deux processus de verrouiller deux fichiers
+    différents au même chemin), et l'OS le libère même si son détenteur
+    s'arrête brutalement. BusyError si un autre le tient plus de `attente`.
     """
-    import errno
+    from nico579_commons import atomique
 
-    with (cible.parent / TRAVAIL.with_suffix(".lock")).open("a+b") as flux:
-        if os.name == "nt":
-            import msvcrt
-
-            def acquerir():
-                flux.seek(0)
-                msvcrt.locking(flux.fileno(), msvcrt.LK_NBLCK, 1)
-
-            def liberer():
-                flux.seek(0)
-                msvcrt.locking(flux.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
-
-            def acquerir():
-                fcntl.flock(flux.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-
-            def liberer():
-                fcntl.flock(flux.fileno(), fcntl.LOCK_UN)
-
-        limite = time.monotonic() + max(0, attente)
-        while True:
-            try:
-                acquerir()
-                break
-            except OSError as exc:
-                if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
-                    raise
-                if time.monotonic() >= limite:
-                    raise BusyError("publication de progression en cours") from exc
-                time.sleep(0.005)
-        try:
-            yield
-        finally:
-            liberer()
+    pile = contextlib.ExitStack()
+    try:
+        pile.enter_context(atomique.verrou_inter_processus(
+            cible.parent / TRAVAIL.stem, delai_s=max(0, attente)))
+    except TimeoutError as exc:
+        raise BusyError("publication de progression en cours") from exc
+    with pile:
+        yield
 
 
 def _ecrire_fiche_travail(cible: Path, etat: dict) -> bool:
     """Remplace une fiche atomiquement, y compris sous antivirus Windows."""
-    import uuid
+    from nico579_commons import atomique
 
-    temporaire = cible.with_name(
-        f".{cible.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+    temporaire = atomique.chemin_part(cible)
     reussi = False
     try:
         temporaire.write_text(json.dumps(etat, ensure_ascii=False), encoding="utf-8")
         with _verrou_travail(cible):
-            temporaire.replace(cible)
+            atomique.remplacer(temporaire, cible)
         reussi = True
     except (OSError, BusyError):
         pass
@@ -2357,16 +2232,17 @@ def _lire_fiche_travail(cible: Path) -> dict:
     return etat if isinstance(etat, dict) else {}
 
 
-def _supprimer_fiche_travail(cible: Path, attendu: dict, attente: float = 0) -> None:
+def _supprimer_fiche_travail(cible: Path, attendu: dict, attente: float = 0) -> bool:
     """Ne retire que la publication lue, sans pouvoir effacer le tick suivant."""
     try:
         with _verrou_travail(cible, attente=attente):
             if _lire_fiche_travail(cible) == attendu:
                 cible.unlink(missing_ok=True)
+        return True
     except (OSError, BusyError):
         # La purge peut attendre le prochain polling. Une fiche active ne
         # doit jamais être sacrifiée pour faire disparaître une ancienne fin.
-        pass
+        return False
 
 
 def travail(quoi: str, fait: float = 0, total: int = 0, cle: str | None = None) -> None:
@@ -2423,7 +2299,7 @@ def fin_travail(conserver: float = 0) -> None:
     _supprimer_fiche_travail(cible, etat, attente=0.25)
 
 
-def _etats_travail() -> tuple:
+def _etats_travail(retirer_conclusion: str | None = None) -> tuple:
     """Renvoie (actifs, terminés encore affichables), en purgeant les périmés."""
     import datetime as dt
 
@@ -2441,11 +2317,13 @@ def _etats_travail() -> tuple:
         etat = _lire_fiche_travail(fichier)
         perime = not etat
         termine = etat.get("termine") if etat else None
+        a_retirer = bool(termine and retirer_conclusion is not None
+                        and etat.get("cle") == retirer_conclusion)
         if termine:
             try:
                 fini = dt.datetime.fromisoformat(str(termine))
                 duree = float(etat.get("visible_secondes", TRAVAIL_TERMINE_VISIBLE))
-                perime = (maintenant - fini).total_seconds() > duree
+                perime = (maintenant - fini).total_seconds() > duree or a_retirer
             except (TypeError, ValueError):
                 perime = True
             if not perime:
@@ -2462,16 +2340,25 @@ def _etats_travail() -> tuple:
             if not perime:
                 actifs.append(etat)
         if perime:
-            _supprimer_fiche_travail(fichier, etat)
+            supprime = _supprimer_fiche_travail(fichier, etat, attente=0.25 if a_retirer else 0)
+            if a_retirer and not supprime:
+                termines.append(etat)
     return actifs, termines
 
 
+def effacer_conclusion_travail(cle: str) -> bool:
+    _, termines = _etats_travail(retirer_conclusion=cle)
+    return not any(etat.get("cle") == cle for etat in termines)
+
+
 def _priorite_travail(etat: dict, actif: bool) -> tuple:
-    """Le téléchargement reste visible face à un assemblage concurrent."""
+    """Conclusion de mise à jour, puis téléchargement, puis assemblage."""
     cle = str(etat.get("cle") or "")
     telechargement = cle in ("phase.inventory_clips", "phase.download_clips")
     # actif download > fin download > actif autre > fin autre
     categorie = (4 if actif else 3) if telechargement else (2 if actif else 1)
+    if cle == "phase.update_noop":
+        categorie = 5
     return categorie, str(etat.get("termine") or etat.get("depuis") or "")
 
 

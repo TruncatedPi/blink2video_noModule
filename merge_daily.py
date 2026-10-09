@@ -21,7 +21,6 @@ import argparse
 import datetime as dt
 import functools
 import hashlib
-import json
 import os
 import platform
 import re
@@ -38,6 +37,8 @@ try:
 except ImportError:  # Python 3.8 (build Windows 7, voir build-win7.yml) : pas de zoneinfo en stdlib.
     from backports.zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+
+from nico579_commons import atomique
 
 import runtime
 
@@ -440,22 +441,31 @@ def _erreurs_ffprobe(stderr: str) -> list:
     return erreurs
 
 
-def valid_mp4_complet(path: Path) -> bool:
-    """Vérifie un téléchargement entier avant de le publier ou le supprimer.
+def _ligne_sans_donnee_privee(ligne: str, path: Path) -> str:
+    """Une ligne d'erreur de la sonde, sans chemin, nom de fichier ni adresse.
 
-    La vérification structurelle élimine les réponses HTML et les fichiers
-    tronqués au niveau d'une boîte. Une sonde parcourt ensuite tous les paquets
-    vidéo : elle détecte notamment un ``mdat`` écourté malgré un ``ftyp`` et un
-    ``moov`` encore lisibles. Faute de sonde, on échoue fermé afin qu'aucune
-    source distante ne soit supprimée sur la foi d'un contrôle incomplet.
-    Toute ligne d'erreur de ffprobe fait refuser le fichier, sauf le bruit
-    connu des clips intacts (_BRUITS_FFPROBE).
-    """
+    ffprobe cite parfois le fichier (« /chemin/clip.mp4: Invalid data ... ») ;
+    la raison d'un refus est imprimée dans le journal, que les utilisateurs
+    collent dans les issues publiques : jamais de chemin ni de nom de clip."""
+    for morceau in sorted({str(path), path.name, str(path.parent)}, key=len, reverse=True):
+        if morceau:
+            ligne = ligne.replace(morceau, "<fichier>")
+    ligne = re.sub(r"@ 0x[0-9a-fA-F]+", "@ ADR", ligne)
+    ligne = re.sub(r"[A-Za-z]:[\\/][^\s:]*|/[^\s:]+/[^\s:]*", "<chemin>", ligne)
+    return " ".join(ligne.split())[:140]
+
+
+def _motif_refus_mp4_complet(path: Path) -> str:
+    """Pourquoi ce téléchargement est refusé ; chaîne vide s'il est valide.
+
+    Source unique de la décision : ``valid_mp4_complet`` n'en garde que le
+    booléen, ``raison_refus_mp4`` rend le texte. Les motifs sont des mots-clés
+    stables plus, quand la sonde s'est exprimée, sa première ligne utile."""
     if not valid_mp4(path):
-        return False
+        return "structure=boite MP4 absente, tronquee ou pas une video"
     outil = _outil_validation_media()
     if outil is None:
-        return False
+        return "outil=aucun ffprobe ni ffmpeg disponible"
     genre, executable = outil
     if genre == "ffprobe":
         commande = [
@@ -477,84 +487,72 @@ def valid_mp4_complet(path: Path) -> bool:
             stderr=subprocess.PIPE, text=True, encoding="utf-8",
             errors="replace", check=False, timeout=120,
         )
-    except (OSError, subprocess.SubprocessError):
-        return False
+    except (OSError, subprocess.SubprocessError) as erreur:
+        return f"outil={genre} lancement={type(erreur).__name__}"
+    lignes = _erreurs_ffprobe(resultat.stderr) if genre == "ffprobe" else [
+        ligne.strip() for ligne in (resultat.stderr or "").splitlines() if ligne.strip()]
+    premiere = _ligne_sans_donnee_privee(lignes[0], path) if lignes else ""
     if resultat.returncode != 0:
-        return False
+        return (f"outil={genre} code={resultat.returncode}"
+                + (f" ligne={premiere}" if premiere else ""))
     if genre == "ffprobe":
-        if _erreurs_ffprobe(resultat.stderr):
-            return False
+        if lignes:
+            return f"outil={genre} ligne={premiere}"
         nombres = [ligne.strip() for ligne in (resultat.stdout or "").splitlines()]
         try:
-            return any(int(nombre) > 0 for nombre in nombres if nombre)
+            if not any(int(nombre) > 0 for nombre in nombres if nombre):
+                return f"outil={genre} paquets-video=0"
         except ValueError:
-            return False
-    return True
+            return f"outil={genre} sortie=illisible"
+    return ""
 
 
-# Un verrou par fichier pour les lecteurs ET les écrivains d'un même processus
-# (les threads de serve.py) : voir load_json() et save_json().
-_VERROUS_SAVE_JSON: dict = {}
-_VERROU_SAVE_JSON = threading.Lock()
+def valid_mp4_complet(path: Path) -> bool:
+    """Vérifie un téléchargement entier avant de le publier ou le supprimer.
+
+    La vérification structurelle élimine les réponses HTML et les fichiers
+    tronqués au niveau d'une boîte. Une sonde parcourt ensuite tous les paquets
+    vidéo : elle détecte notamment un ``mdat`` écourté malgré un ``ftyp`` et un
+    ``moov`` encore lisibles. Faute de sonde, on échoue fermé afin qu'aucune
+    source distante ne soit supprimée sur la foi d'un contrôle incomplet.
+    Toute ligne d'erreur de ffprobe fait refuser le fichier, sauf le bruit
+    connu des clips intacts (_BRUITS_FFPROBE).
+    """
+    return not _motif_refus_mp4_complet(path)
 
 
-def _verrou_fichier(path: Path) -> threading.Lock:
-    with _VERROU_SAVE_JSON:
-        return _VERROUS_SAVE_JSON.setdefault(os.path.abspath(path), threading.Lock())
+def raison_refus_mp4(path: Path) -> str:
+    """La raison du refus de ``valid_mp4_complet`` pour ce fichier, sans chemin
+    ni nom de clip, prête à être imprimée. Ne lève jamais : un diagnostic ne
+    doit pas transformer un échec en plantage. Relance le contrôle, donc à ne
+    demander qu'après un refus."""
+    try:
+        return _motif_refus_mp4_complet(path) or "aucune (le fichier est valide)"
+    except Exception as erreur:
+        return f"diagnostic impossible ({type(erreur).__name__})"
 
 
 def load_json(path: Path, default: dict) -> dict:
-    """Lit un objet JSON, ou ``default`` s'il est absent ou illisible.
+    """Lit un objet JSON, ou ``default`` s'il est absent, corrompu ou d'un
+    autre type que dict.
 
-    Sous Windows, une lecture qui croise un remplacement du fichier échoue en
-    PermissionError (4 lectures sur 70 969 sous forte concurrence, mesuré le
-    2026-09-24) : rendre alors ``default`` faisait réécrire un contenu vidé à
-    toute lecture-modification-écriture. Même verrou par fichier que
-    save_json() entre les threads d'un processus, et nouvelles tentatives
-    rapprochées face à un autre processus (antivirus, indexeur)."""
-    with _verrou_fichier(path):
-        for tentative in range(10):
-            try:
-                if not path.exists():
-                    return default
-                value = json.loads(path.read_text(encoding="utf-8"))
-                return value if isinstance(value, dict) else default
-            except PermissionError:
-                if tentative == 9:
-                    return default
-                time.sleep(0.05)
-            except (OSError, json.JSONDecodeError):
-                return default
+    La lecture elle-même (refus passager de Windows face à un remplacement
+    concurrent, antivirus, indexeur) est nico579_commons.atomique.lire_json :
+    un refus qui persiste lève au lieu de rendre ``default``, qui ferait
+    réécrire un contenu vidé à toute lecture-modification-écriture."""
+    value = atomique.lire_json(path, default)
+    return value if isinstance(value, dict) else default
 
 
 def save_json(path: Path, value: dict) -> None:
-    """Remplace ``path`` atomiquement.
+    """Remplace ``path`` atomiquement (nico579_commons.atomique.ecrire_json).
 
-    Temporaire propre à chaque appel, comme runtime._ecrire_texte_atomique :
-    un nom fixe (``path.with_suffix(".tmp")``) était partagé par tous les
-    écrivains. serve.py tourne sur un ThreadingHTTPServer et la page charge
-    /api/clips et /api/videos en parallèle, qui réécrivent tous deux
-    ASSEMBLED_DURATIONS : le second ``replace`` trouvait le temporaire déjà
-    consommé par le premier (FileNotFoundError, reproduit 197 fois sur 600
-    écritures concurrentes, audit du 2026-09-24).
-
-    Sous Windows, remplacer un fichier qu'un autre écrivain remplace, ou
-    qu'un lecteur tient ouvert, au même instant échoue en PermissionError
-    (« Access is denied », 162 fois sur 600 en CI) : les écrivains d'un même
-    processus passent donc l'un après l'autre, et une lecture concurrente
-    (autre thread, autre processus, antivirus) est absorbée par quelques
-    nouvelles tentatives rapprochées, comme runtime._supprimer_verrou."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    contenu = json.dumps(value, indent=2, ensure_ascii=False)
-    with _verrou_fichier(path):
-        for tentative in range(10):
-            try:
-                runtime._ecrire_texte_atomique(path, contenu)
-                return
-            except PermissionError:
-                if tentative == 9:
-                    raise
-                time.sleep(0.05)
+    Temporaire propre à chaque appel : un nom fixe était partagé par tous les
+    écrivains, et serve.py tourne sur un ThreadingHTTPServer dont deux routes
+    réécrivent ASSEMBLED_DURATIONS en parallèle (FileNotFoundError, reproduit
+    197 fois sur 600 écritures concurrentes, audit du 2026-09-24). Les refus
+    passagers de Windows (162 sur 600 en CI) sont retentés."""
+    atomique.ecrire_json(path, value)
 
 
 def find_ffmpeg() -> str:
@@ -596,6 +594,29 @@ def find_ffmpeg() -> str:
         if has_drawtext(candidat):
             return candidat
     return candidats[0]
+
+
+def extraire_vignette(ffmpeg: str, source: Path, pending: Path, timeout=None) -> bool:
+    """Extrait la vignette d'un clip dans `pending` ; vrai si le fichier existe.
+
+    Prise un peu après le début, jamais sur la première image : une caméra qui
+    vient de se déclencher livre souvent une ou deux images noires ou
+    surexposées, le temps que l'exposition s'ajuste. Un clip plus court que la
+    position demandée se rabat sur sa toute première image. Partagée par
+    serve.py (à la demande) et le téléchargeur (à l'arrivée du clip) : une seule
+    manière de fabriquer la vignette, donc un seul aspect."""
+    for entree in (["-ss", "1.5", "-i", str(source)], ["-i", str(source)]):
+        # -ss avant -i : ffmpeg saute directement à la position demandée au
+        # lieu de décoder tout ce qui précède.
+        runtime.lancer(
+            [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", *entree,
+             "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "5", str(pending)],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, check=False, timeout=timeout,
+        )
+        if pending.is_file() and pending.stat().st_size > 0:
+            return True
+    return False
 
 
 def has_drawtext(ffmpeg: str) -> bool:
@@ -775,11 +796,20 @@ def _cles_camera_par_collision(entries: dict) -> dict:
     Le network_id trié en premier garde le nom nu (n'invalide pas
     l'historique déjà assemblé sous ce nom, quel qu'il soit) ; les autres
     reçoivent un suffixe lisible, conservant le nom pour l'affichage comme
-    demandé plutôt qu'un identifiant opaque."""
+    demandé plutôt qu'un identifiant opaque.
+
+    Même règle pour deux noms DIFFÉRENTS qui se nettoient pareil (« Garage »
+    et « Garage! » donnent le même dossier par safe_name) : sans elle, leurs
+    journalières s'écrivaient au même chemin, l'une écrasant l'autre. Le nom
+    déjà propre garde son dossier (l'historique déjà assemblé n'est pas
+    déplacé), les autres reçoivent « (2) », « (3) »... ; la casse ne distingue
+    pas deux dossiers, Windows et macOS les confondant."""
     reseaux_par_nom = defaultdict(set)
+    paires = set()
     for entry in entries.values():
         camera = str(entry.get("camera") or "camera").strip() or "camera"
         network_id = str(entry.get("network_id") or "")
+        paires.add((camera, network_id))
         if network_id:
             reseaux_par_nom[camera].add(network_id)
 
@@ -790,6 +820,26 @@ def _cles_camera_par_collision(entries: dict) -> dict:
         _principal, *autres = sorted(reseaux)
         for rang, reseau in enumerate(autres, start=2):
             cles[(camera, reseau)] = f"{camera} ({rang})"
+
+    def dossier(cle: str) -> str:
+        return safe_name(cle).casefold()
+
+    cles_par_paire = {paire: cles.get(paire, paire[0]) for paire in paires}
+    noms = sorted(set(cles_par_paire.values()),
+                  key=lambda nom: (safe_name(nom) != nom, nom.casefold(), nom))
+    pris, renommes = set(), {}
+    for nom in noms:
+        if dossier(nom) not in pris:
+            pris.add(dossier(nom))
+            continue
+        rang = 2
+        while dossier(f"{nom} ({rang})") in pris or f"{nom} ({rang})" in noms:
+            rang += 1
+        renommes[nom] = f"{nom} ({rang})"
+        pris.add(dossier(renommes[nom]))
+    for paire, nom in cles_par_paire.items():
+        if nom in renommes:
+            cles[paire] = renommes[nom]
     return cles
 
 
