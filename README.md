@@ -79,7 +79,19 @@ old they are.
 The Record button, mid-recording ("Stop recording", in red): one click to start
 saving the current stream to `Blink_Direct`, one to stop. Recordings appear
 under Live Recordings, browsable and filterable exactly like detection clips.
-Live recordings currently contain video without audio.
+To include camera sound in live listening, manual recordings and automatic
+motion/ring recordings, enable **Settings → Video → Include camera audio in
+Live View and recordings**. This is off by default and applies to new sessions.
+Audio-enabled sessions use compatible MSE mode, which can take longer to start.
+Use **Listen/Mute** in Live View or the saved video's volume controls. If the
+primary channel stays silent, try **Alternate** in Settings. A missing audio
+track still produces playable video.
+
+Playback starts muted. Unmuting a video shares that choice and volume with
+other videos on the same page, including players recreated while scrolling.
+Changing views, gallery pages or filters, or reloading the page, resets playback
+to muted. Playback mute does not change the audio saved in a recording.
+Previously saved silent recordings remain silent.
 
 Enable doorbell auto-recording in Settings → Alerts. Motion and button alerts
 are read from Blink's v2 event history, including events without a cloud video

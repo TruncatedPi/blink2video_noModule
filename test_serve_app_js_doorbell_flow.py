@@ -7,6 +7,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from test_serve_app_js_audio import audio_source
+
 from test_serve_app_js_datetime import formatting_source
 
 
@@ -29,6 +31,8 @@ class DoorbellBrowserTests(unittest.TestCase):
 
         cls.functions = formatting_source(source) + "\n" + cls.functions
 
+        cls.functions = audio_source(source) + "\n" + cls.functions
+
     def run_js(self, scenario):
         script = r'''
 const assert = require('node:assert/strict');
@@ -38,6 +42,7 @@ let loads=0, renders=0, generationEvenements=0;
 let currentDoorbellEvent=null, pageClips=0, rafraichirVignettes=false;
 let active=['backyard'];
 const evenementsSonnetteAnnonces=new Set();
+const document={querySelectorAll:()=>[]};
 const elements={view:{value:'events'},list:{innerHTML:'initial', querySelectorAll:()=>[]},
                 count:{},btnAlertHistory:{},doorbellAlertBanner:{},
                 doorbellAlertTitle:{},doorbellAlertSubtitle:{},

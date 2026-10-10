@@ -7,6 +7,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from test_serve_app_js_audio import audio_source
+
 
 class TestsLecteursClipsLazy(unittest.TestCase):
     @classmethod
@@ -23,6 +25,8 @@ class TestsLecteursClipsLazy(unittest.TestCase):
         if match is None:
             raise AssertionError("fonction introuvable : preparerLecteursClips")
         cls.fonction = match.group(0)
+
+        cls.fonction = audio_source(source) + "\n" + cls.fonction
 
     def executer(self, actions: str) -> dict:
         script = r"""
@@ -233,6 +237,7 @@ class FakeObserver {
 }
 
 const document = {
+  querySelectorAll: () => [zoneA, zoneB].flatMap(zone => zone.child ? [zone.child] : []),
   activeElement: null,
   pictureInPictureElement: null,
   fullscreenElement: null,
@@ -428,7 +433,7 @@ mark('released');
                 self.assertEqual(self.checkpoint(sortie, "protected")["child"], "video-1")
                 self.assertIsNone(self.checkpoint(sortie, "released")["child"])
 
-    def test_reutilisation_reinitialise_les_reglages_et_abort_le_metadata_ancien(self):
+    def test_reutilisation_conserve_audio_page_et_abort_le_metadata_ancien(self):
         sortie = self.executer("""
 observer.emit(zoneA, true);
 const first = zoneA.child;
@@ -462,8 +467,8 @@ mark('reused-for-new-clip', zoneB);
         new_clip = self.checkpoint(sortie, "reused-for-new-clip")
         self.assertEqual(new_clip["child"], "video-1")
         self.assertEqual(new_clip["currentTime"], 0)
-        self.assertEqual(new_clip["volume"], 1)
-        self.assertFalse(new_clip["muted"])
+        self.assertEqual(new_clip["volume"], 0.25)
+        self.assertTrue(new_clip["muted"])
         self.assertEqual(new_clip["playbackRate"], 1)
         self.assertFalse(new_clip["loop"])
         self.assertEqual(len(sortie["videos"]), 1)

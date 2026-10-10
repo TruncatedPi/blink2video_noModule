@@ -62,14 +62,14 @@ globalThis.setTimeout = (fonction, delai) => {
 globalThis.clearTimeout = (id) => { temporisations.delete(id); };
 const elements = Object.fromEntries(Object.entries({
   usbMinutes: '5', cloudMinutes: '15', port: '5000', timezone: 'Europe/Paris',
-  dateFormat: 'mdy', timeFormat: '12h',
+  dateFormat: 'mdy', timeFormat: '12h', cameraAudioTrack: '1',
   storageDir: ' clips ', liveProtocol: 'mse',
   fontSize: '', fontColor: 'white', boxOpacity: '0.55',
   trustedHost: '100.101.194.5', webhookNotifUrl: 'https://exemple.invalid/notif',
   liveAutoStopSeconds: '0', doorbellAutoRecordSeconds: '30', doorbellPollSeconds: '6',
 }).map(([id, value]) => [id, {value}]));
 for (const [id, checked] of Object.entries({
-  timestamp: true, mergeJour: true, mergeSemaine: false,
+  cameraAudioEnabled: true, timestamp: true, mergeJour: true, mergeSemaine: false,
   mergeMois: true, downloadAuto: false,
   doorbellAlertsEnabled: true, doorbellChimeEnabled: true, doorbellAutoRecord: false,
 })) elements[id] = {checked};
@@ -235,6 +235,7 @@ function instantane() {
             "usb_minutes": 3, "cloud_minutes": 12, "port": 5000,
             "storage_dir": "C:\\Mes vidéos\\", "timezone": "Europe/Paris",
             "date_format": "mdy", "time_format": "12h",
+            "camera_audio_enabled": True, "camera_audio_track": 1,
             "timestamp": True, "live_protocol": "mse", "merge_jour": True,
             "merge_semaine": False, "merge_mois": True, "download_auto": False,
             "font_size": None, "font_color": "white", "box_opacity": 0.55,

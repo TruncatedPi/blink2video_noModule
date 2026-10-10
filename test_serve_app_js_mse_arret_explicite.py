@@ -12,6 +12,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from test_serve_app_js_audio import audio_source
+
 
 class TestsArretExpliciteDirectMseCoteClient(unittest.TestCase):
     @classmethod
@@ -120,7 +122,8 @@ class TestsGenerationSessionIdWatchMse(unittest.TestCase):
         # « Direct continu » : le bloc qui les définit l'accompagne.
         debut_continu = source.index("const CLE_DIRECT_CONTINU")
         fin_continu = source.index("// Un seul identifiant par watchMse()", debut_continu)
-        cls.bloc = (source[debut_continu:fin_continu] + "\n" + source[debut_id:fin_id]
+        cls.bloc = (audio_source(source) + "\n" + source[debut_continu:fin_continu]
+                    + "\n" + source[debut_id:fin_id]
                     + "\n" + source[debut_watch:fin_watch])
         if "connecterMse(" not in cls.bloc or "sessionId" not in cls.bloc:
             raise AssertionError("watchMse() ne transmet plus de sessionId à connecterMse()")
@@ -128,11 +131,13 @@ class TestsGenerationSessionIdWatchMse(unittest.TestCase):
     def test_sessionid_pose_avant_le_premier_appel_et_transmis_tel_quel(self):
         script = f"""
 global.window = {{}};
+const system={{camera_audio_enabled:false}};
+const document={{querySelectorAll:()=>[]}};
 
 {self.bloc}
 
 const boxes = {{
-  "live-Jardin": {{ innerHTML: "", querySelector: () => ({{}}) }},
+  "live-Jardin": {{ innerHTML: "", querySelector: () => ({{addEventListener(){{}}}}) }},
 }};
 function $(id) {{ return boxes[id] || null; }}
 function h(s) {{ return s; }}

@@ -22,6 +22,7 @@ DEFAUTS = {
     "timestamp": False, "timezone": "UTC", "date_format": "iso", "time_format": "24h", "merge_jour": True,
     "merge_semaine": True, "merge_mois": True, "download_auto": True,
     "live_protocol": "webrtc",
+    "camera_audio_enabled": False, "camera_audio_track": 0,
     "font_size": None, "font_color": "white", "box_opacity": 0.55,
     "trusted_host": "", "webhook_notif_url": "",
     "live_auto_stop_seconds": 0,
@@ -110,6 +111,22 @@ class TestsValidationReglagesHttp(unittest.TestCase):
         self.stockage.assert_not_called()
         handler.repondre_puis_redemarrer.assert_not_called()
 
+    def test_audio_settings_are_validated_and_preserved_for_older_clients(self):
+        current = dict(serve.runtime.REGLAGES_DEFAUT, camera_audio_enabled=True, camera_audio_track=1)
+        with mock.patch.object(serve.runtime, "lire_reglages", return_value=current):
+            self.assert_enregistre(self.requete(self.payload()), dict(DEFAUTS,
+                camera_audio_enabled=True, camera_audio_track=1))
+        self.assert_enregistre(self.requete(self.payload(camera_audio_enabled=True, camera_audio_track=1)),
+                               dict(DEFAUTS, camera_audio_enabled=True, camera_audio_track=1))
+        for invalid in ("false", 1, None):
+            with self.subTest(enabled=invalid):
+                self.assert_refuse(self.requete(self.payload(camera_audio_enabled=invalid)),
+                                   "camera_audio_enabled : booléen attendu")
+        for invalid in (-1, 2, True, "1", 0.5, None):
+            with self.subTest(track=invalid):
+                self.assert_refuse(self.requete(self.payload(camera_audio_track=invalid)),
+                                   "camera_audio_track : canal 0 ou 1 attendu")
+
     def test_valeurs_par_defaut_et_absence_de_sonde_sans_dossier(self):
         handler = self.requete(self.payload())
         self.assert_enregistre(handler, DEFAUTS)
@@ -126,6 +143,7 @@ class TestsValidationReglagesHttp(unittest.TestCase):
             "timestamp": True, "timezone": "UTC", "date_format": "iso", "time_format": "24h", "merge_jour": False,
             "merge_semaine": False, "merge_mois": False,
             "download_auto": True, "live_protocol": "mse",
+            "camera_audio_enabled": False, "camera_audio_track": 0,
             "font_size": None, "font_color": "white", "box_opacity": 0.55,
             "trusted_host": "", "webhook_notif_url": "",
             "live_auto_stop_seconds": 0,
@@ -306,7 +324,8 @@ class TestsValidationReglagesHttp(unittest.TestCase):
         handler = self.requete(self.payload(
             font_size="40", font_color="  yellow  ", box_opacity="0.3"))
         self.assert_enregistre(handler, {
-            **DEFAUTS, "font_size": 40, "font_color": "yellow", "box_opacity": 0.3,
+            **DEFAUTS, "camera_audio_enabled": False, "camera_audio_track": 0,
+             "font_size": 40, "font_color": "yellow", "box_opacity": 0.3,
         })
 
     def test_taille_police_absente_nulle_ou_vide_vaut_auto(self):

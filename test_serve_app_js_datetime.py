@@ -13,7 +13,7 @@ from pathlib import Path
 def formatting_source(source, settings=None):
     settings = settings or {"timezone": "UTC", "date_format": "iso", "time_format": "24h"}
     start = source.index("const AFFICHAGE_DATES =")
-    end = source.index("// ── i18n", start)
+    end = source.index("// Préférence de lecture", start)
     return source[start:end].replace("__DATE_TIME_SETTINGS__", json.dumps(settings))
 
 

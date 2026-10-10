@@ -161,6 +161,7 @@ import blink_events
 import blink_models
 import blink_registre
 import blink_webrtc
+import blink_audio
 import maj
 import merge_daily as md
 import watch
@@ -613,7 +614,12 @@ def _demander_arret_direct(session_id: str) -> bool:
 # demarrage, comme tous les autres reglages (port, fuseau...) : un
 # changement redemarre deja le serveur (/api/reglages cote JS). Retombe sur
 # MSE si aiortc n'est pas installe, meme "webrtc" choisi.
-WEBRTC_ACTIF = (runtime.lire_reglages()["live_protocol"] == "webrtc") and blink_webrtc.DISPONIBLE
+_reglages_direct = runtime.lire_reglages()
+# Le chemin audio conserve H.264 + AAC ensemble en MSE. Le protocole
+# préféré reste enregistré pour les sessions sans audio.
+WEBRTC_ACTIF = (_reglages_direct["live_protocol"] == "webrtc"
+                and not _reglages_direct["camera_audio_enabled"]
+                and blink_webrtc.DISPONIBLE)
 
 
 def _slot_pris(quoi: str, name: str = "") -> None:
@@ -2320,6 +2326,13 @@ def _preparer_reglages_web(payload: dict) -> tuple[str, dict]:
     reglages["live_auto_stop_seconds"] = live_auto_stop_seconds
 
     current = runtime.lire_reglages()
+    audio_enabled = payload.get("camera_audio_enabled", current["camera_audio_enabled"])
+    if not isinstance(audio_enabled, bool):
+        raise _ReglagesInvalides("camera_audio_enabled : booléen attendu")
+    audio_track = payload.get("camera_audio_track", current["camera_audio_track"])
+    if isinstance(audio_track, bool) or not isinstance(audio_track, int) or audio_track not in (0, 1):
+        raise _ReglagesInvalides("camera_audio_track : canal 0 ou 1 attendu")
+    reglages.update(camera_audio_enabled=audio_enabled, camera_audio_track=audio_track)
     for field, choices in (("date_format", runtime.FORMATS_DATE_VALIDES),
                            ("time_format", runtime.FORMATS_HEURE_VALIDES)):
         value = payload.get(field, current[field])
@@ -2809,6 +2822,7 @@ class Handler(serveweb.Handler):
 
         state = BLINK.call(read, timeout=60)
         state["webrtc"] = WEBRTC_ACTIF
+        state["camera_audio_enabled"] = runtime.lire_reglages()["camera_audio_enabled"]
         # Relu a chaque appel, contrairement a WEBRTC_ACTIF (fige a l'import
         # du process) : un changement depuis les Reglages redemarre deja le
         # serveur, mais watchLive() lit ce champ pendant un direct deja en
@@ -3614,6 +3628,8 @@ class Handler(serveweb.Handler):
             url = BLINK.call(start, timeout=45)
             _journal_direct(name, f"flux Blink ouvert sur {url}")
 
+            audio_settings = runtime.lire_reglages()
+            audio_options = blink_audio.stream_options(audio_settings)
             process = runtime.demarrer(
                 # loglevel "info" temporaire (diagnostic partage relais/ffmpeg
                 # en cours, cf. direct.log) : à repasser à "error" une fois
@@ -3643,9 +3659,9 @@ class Handler(serveweb.Handler):
                  "-analyzeduration", "1500000", "-probesize", "1500000",
                  "-i", url,
                  # copy : remux sans réencodage, coût CPU quasi nul.
-                 "-c:v", "copy", "-an",
+                 "-map", "0:v:0", "-c:v", "copy", *audio_options,
                  "-f", "mp4",
-                 "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+                 "-movflags", blink_audio.fragment_flags(audio_settings),
                  "-"],
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -3687,7 +3703,11 @@ class Handler(serveweb.Handler):
                 if trace:
                     reason = f"{reason} | ffmpeg : {trace}"
                 raise RuntimeError(reason)
-            codec_str = h264_mime_codec_from_moov(first)
+            codecs = [h264_mime_codec_from_moov(first)]
+            audio_codec = blink_audio.aac_mime_codec_from_moov(first)
+            if audio_codec:
+                codecs.append(audio_codec)
+            codec_str = ", ".join(codecs)
             # Pré-alimenté avec `first` (verdict ignoré : voir _ecrire, ce
             # premier bloc est de toute façon toujours écrit intégralement)
             # pour que son suivi des tailles de boîte reste synchronisé sur
@@ -3703,6 +3723,7 @@ class Handler(serveweb.Handler):
             self.send_header("Content-Type", "video/mp4")
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Codec", codec_str)
+            self.send_header("X-Audio", "1" if audio_codec else "0")
             self.send_header("Connection", "close")
             self.close_connection = True
             self.end_headers()
@@ -5479,6 +5500,18 @@ __CSS__
         <option value="cyan">
         <option value="orange">
       </datalist>
+      <label>
+        <input type="checkbox" id="cameraAudioEnabled">
+        <span data-i18n="reglages.cameraAudio">Inclure le son de la caméra dans le direct et les enregistrements</span>
+      </label>
+      <p class="sub tiny" data-i18n="reglages.cameraAudio.hint">Avec le son, les directs utilisent le mode compatible MSE et peuvent démarrer plus lentement. La lecture commence en sourdine ; écouter le son ne change pas l'enregistrement.</p>
+      <div class="champCadence">
+        <label for="cameraAudioTrack" data-i18n="reglages.cameraAudio.track">Canal audio</label>
+        <select id="cameraAudioTrack">
+          <option value="0" data-i18n="reglages.cameraAudio.primary">Principal</option>
+          <option value="1" data-i18n="reglages.cameraAudio.alternate">Alternatif (si le principal reste silencieux)</option>
+        </select>
+      </div>
       <div class="champCadence">
         <label for="liveProtocol" data-i18n="reglages.liveProtocol">Protocole du direct</label>
         <select id="liveProtocol">

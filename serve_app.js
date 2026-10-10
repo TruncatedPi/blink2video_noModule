@@ -18,6 +18,7 @@ window.fetch = (entree, options) => {
 // d'un autre onglet. pagehide couvre aussi les rechargements et le bfcache.
 window.addEventListener("pagehide", () => {
   for (const name of nomsDirectsActifs()) stopWatch(name, true);
+  reinitialiserAudioPage();
 });
 
 // Toute valeur reçue de Blink ou lue dans un nom de fichier est une donnée,
@@ -112,6 +113,89 @@ function dateHeureLocale(valeur) {
   return m ? `${dateLocale(m[1])} ${heureLocale(m[2])}` : "";
 }
 
+// Préférence de lecture limitée à cette page : aucun stockage persistant.
+let lectureMuette = true;
+let volumeLecture = 1;
+const etatsAudioVideo = new WeakMap();
+const videosAudioInitialises = new WeakSet();
+
+function appliquerAudioVideo(video, muet = lectureMuette) {
+  etatsAudioVideo.set(video, { muet, volume: volumeLecture });
+  video.muted = muet;
+  video.volume = volumeLecture;
+  actualiserBoutonAudio(video);
+}
+
+function actualiserBoutonAudio(video) {
+  const bouton = video.closest?.(".live")?.querySelector('[data-action="toggle-audio"]');
+  if (!bouton) return;
+  const disponible = video.blinkAudioDisponible;
+  const cle = disponible === true
+    ? (video.muted || video.volume === 0 ? "live.audio.listen" : "live.audio.mute")
+    : (disponible === false ? "live.audio.unavailable" : "live.audio.waiting");
+  bouton.disabled = disponible !== true;
+  bouton.textContent = t(cle);
+  bouton.title = t(cle);
+  bouton.setAttribute("aria-label", t(cle));
+}
+
+function memoriserAudioVideo(video) {
+  if (video.isConnected === false) return;
+  const attendu = etatsAudioVideo.get(video);
+  if (attendu && attendu.muet === video.muted && attendu.volume === video.volume) return;
+  lectureMuette = video.muted;
+  volumeLecture = video.volume;
+  // Mettre à jour aussi les lecteurs déjà créés : les suivants et les
+  // lecteurs recyclés héritent du même choix tant qu'on reste sur la page.
+  for (const autre of document.querySelectorAll("#list video")) appliquerAudioVideo(autre);
+}
+
+function preparerAudioVideo(video) {
+  if (!videosAudioInitialises.has(video)) {
+    videosAudioInitialises.add(video);
+    video.addEventListener("volumechange", () => memoriserAudioVideo(video));
+  }
+  video.defaultMuted = true;
+  appliquerAudioVideo(video);
+}
+
+function preparerAudioListe() {
+  for (const video of $("list").querySelectorAll("video")) preparerAudioVideo(video);
+}
+
+function reinitialiserAudioPage() {
+  lectureMuette = true;
+  for (const video of document.querySelectorAll("#list video")) appliquerAudioVideo(video);
+}
+
+async function lireVideo(video) {
+  try {
+    await video.play();
+  } catch (error) {
+    if (error.name !== "NotAllowedError" || video.muted) throw error;
+    // Une politique d'autoplay ne doit pas être traitée comme une panne
+    // Blink. Garder la préférence de la page mais démarrer ce lecteur muet.
+    appliquerAudioVideo(video, true);
+    await video.play();
+  }
+}
+
+function audioBtn(name) {
+  if (!system?.camera_audio_enabled) return "";
+  return `<button class="watch audio" data-action="toggle-audio" data-name="${h(name)}" disabled>${h(t("live.audio.waiting"))}</button>`;
+}
+
+function toggleAudio(name) {
+  const video = $("live-" + cssId(name))?.querySelector("video");
+  if (!video || video.blinkAudioDisponible !== true) return;
+  const ecouter = video.muted || video.volume === 0;
+  video.muted = !ecouter;
+  if (ecouter && video.volume === 0) video.volume = 1;
+  memoriserAudioVideo(video);
+}
+
+// ── fin audio de lecture ──────────────────────────────────────────────────
+
 // ── i18n ─────────────────────────────────────────────────────────────────
 // Même pattern que gui/app.js de lidar2map : dico inline par locale + attribut
 // data-i18n sur les nœuds statiques, t()/tf() appelés directement dans le
@@ -171,6 +255,13 @@ const I18N = {
     "reglages.fontSize": "Taille de police", "reglages.fontColor": "Couleur",
     "reglages.boxOpacity": "Opacité du bandeau",
     "reglages.timezone": "Fuseau horaire",
+    "reglages.cameraAudio": "Inclure le son de la caméra dans le direct et les enregistrements",
+    "reglages.cameraAudio.hint": "Avec le son, les directs utilisent le mode compatible MSE et peuvent démarrer plus lentement. La lecture commence en sourdine ; écouter le son ne change pas l'enregistrement.",
+    "reglages.cameraAudio.track": "Canal audio",
+    "reglages.cameraAudio.primary": "Principal",
+    "reglages.cameraAudio.alternate": "Alternatif (si le principal reste silencieux)",
+    "live.audio.listen": "🔊 Écouter", "live.audio.mute": "🔇 Couper le son",
+    "live.audio.unavailable": "🔇 Audio indisponible", "live.audio.waiting": "🔇 Attente du son",
     "reglages.dateTime": "Date et heure",
     "reglages.dateFormat": "Format de date",
     "reglages.dateFormat.iso": "AAAA-MM-JJ (2026-10-09)",
@@ -407,6 +498,13 @@ const I18N = {
     "reglages.fontSize": "Font size", "reglages.fontColor": "Color",
     "reglages.boxOpacity": "Box opacity",
     "reglages.timezone": "Time zone",
+    "reglages.cameraAudio": "Include camera audio in Live View and recordings",
+    "reglages.cameraAudio.hint": "With audio enabled, live sessions use compatible MSE mode and may take longer to start. Playback starts muted; listening does not change recorded audio.",
+    "reglages.cameraAudio.track": "Audio channel",
+    "reglages.cameraAudio.primary": "Primary",
+    "reglages.cameraAudio.alternate": "Alternate (if the primary stays silent)",
+    "live.audio.listen": "🔊 Listen", "live.audio.mute": "🔇 Mute",
+    "live.audio.unavailable": "🔇 Audio unavailable", "live.audio.waiting": "🔇 Waiting for audio",
     "reglages.dateTime": "Date and time",
     "reglages.dateFormat": "Date format",
     "reglages.dateFormat.iso": "YYYY-MM-DD (2026-10-09)",
@@ -646,6 +744,7 @@ function setLang(code, persist) {
   // écran déjà posé survit donc au changement de langue sans se refaire,
   // et doit être retraduit ici plutôt que de rester dans l'ancienne langue.
   if (typeof syncExpandButtons === "function") syncExpandButtons();
+  for (const video of document.querySelectorAll("#list video")) actualiserBoutonAudio(video);
   // #sourdineListe porte data-i18n="sourdine.loading" en repli HTML :
   // applyI18n() vient d'écraser ses cases à cocher réelles par ce texte de
   // chargement si le panneau est ouvert pendant la bascule de langue.
@@ -1733,6 +1832,8 @@ async function connecterMse(name, video, signalGlobal, texteAttente, t0, reveilI
     }
 
     const codec = response.headers.get("X-Codec") || "avc1.42E01E";
+    video.blinkAudioDisponible = response.headers.get("X-Audio") === "1";
+    actualiserBoutonAudio(video);
     if (enregistrer && box) {
       const bouton = box.querySelector('[data-action="toggle-record"]');
       if (bouton) appliquerEtatEnregistrement(bouton, true);
@@ -1746,7 +1847,7 @@ async function connecterMse(name, video, signalGlobal, texteAttente, t0, reveilI
     }
     tentative.attendrePremiereImage();
     sourceBuffer = mediaSource.addSourceBuffer(mimeType);
-    sourceBuffer.mode = "sequence";
+    sourceBuffer.mode = video.blinkAudioDisponible ? "segments" : "sequence";
     reader = response.body.getReader();
 
     for (;;) {
@@ -1758,7 +1859,7 @@ async function connecterMse(name, video, signalGlobal, texteAttente, t0, reveilI
         // Le premier morceau est souvent seulement ftyp+moov. play() aide
         // l'autoplay, mais seul loadeddata/playing ci-dessus prouve qu'une
         // vraie image a été décodée.
-        const lancement = video.play();
+        const lancement = lireVideo(video);
         if (lancement && typeof lancement.catch === "function") {
           lancement.catch(() => {});
         }
@@ -1925,8 +2026,10 @@ async function watchWebRTC(name, controller = new AbortController(), t0 = perfor
      <button class="watch stop" data-i18n="watch.stop"
              data-action="stop-live" data-name="${h(name)}">${h(t("watch.stop"))}</button>
      ${recordBtn(name)}
+     ${audioBtn(name)}
      ${expandBtn(name)}`;
   const video = box.querySelector("video");
+  preparerAudioVideo(video);
   let budgetEcoule = false;
   let lecture = false;
   const budget = armerBudget(name,
@@ -2090,7 +2193,7 @@ async function tenterWebRTC(name, video, signal, essai, surLecture = () => {}, e
       });
     }
     try {
-      const lancement = video.play();
+      const lancement = lireVideo(video);
       if (lancement && typeof lancement.catch === "function") lancement.catch(interrompu);
     } catch (error) { interrompu(); }
   };
@@ -2184,8 +2287,10 @@ async function watchMse(name, enregistrer = false) {
      <button class="watch stop" data-i18n="watch.stop"
              data-action="stop-live" data-name="${h(name)}">${h(t("watch.stop"))}</button>
      ${recordBtn(name)}
+     ${audioBtn(name)}
      ${expandBtn(name)}`;
   const video = box.querySelector("video");
+  preparerAudioVideo(video);
   const t0 = performance.now();
   window.__mseMetric = null;
 
@@ -2497,6 +2602,7 @@ function navigationClips(total, pages) {
 
 function changerPageClips(page, direction, taille = clipsParPage) {
   if (page === pageClips && taille === clipsParPage) return;
+  reinitialiserAudioPage();
   pageClips = page;
   if (taille !== clipsParPage) {
     try { localStorage.setItem(CLE_TAILLE_PAGE_CLIPS, String(taille)); } catch (erreur) {}
@@ -2611,6 +2717,7 @@ function renderVideos(kind) {
         .map((v) => videoCard(v, parJour)).join("")}
     </div>
   `).join("");
+  preparerAudioListe();
 }
 
 // Le nom du fichier porte l'horodatage UTC (déclencherSnapshot, serve.py) :
@@ -2659,7 +2766,7 @@ function videoCard(v, parJour = false) {
   // meme label sur chaque carte n'apprendrait rien - la camera, elle,
   // n'apparait plus nulle part ailleurs dans ce mode.
   return `<div class="card">
-    <video preload="none" controls playsinline
+    <video preload="none" controls muted playsinline
            poster="${h(poster)}" src="${h(media)}"></video>
     <div class="meta">
       <div>
@@ -2683,6 +2790,7 @@ function preparerLecteursClips() {
         || etat.zone.contains(document.activeElement)
         || document.pictureInPictureElement === video
         || etat.zone.contains(document.fullscreenElement)))) return;
+    memoriserAudioVideo(video);
     etat.lecture = {
       temps: video.readyState ? video.currentTime : (etat.lecture?.temps || 0),
       volume: video.volume, muet: video.muted, vitesse: video.playbackRate, boucle: video.loop,
@@ -2711,8 +2819,7 @@ function preparerLecteursClips() {
     video.src = etat.zone.dataset.src;
     video.setAttribute("aria-label", etat.zone.getAttribute("aria-label"));
     const lecture = etat.lecture;
-    video.volume = lecture?.volume ?? 1;
-    video.muted = lecture?.muet ?? false;
+    preparerAudioVideo(video);
     video.playbackRate = lecture?.vitesse ?? 1;
     video.loop = lecture?.boucle ?? false;
     if (lecture) {
@@ -2930,6 +3037,7 @@ function ouvrirFiltre() {
 }
 
 async function appliquerFiltre() {
+  reinitialiserAudioPage();
   pageClips = 0;
   if (plageEnAttente) plageClips = plageEnAttente;
   sauvegarderFiltre();
@@ -3229,6 +3337,7 @@ majCaseMasquees();
 // rechargement complet de la page). "live" n'en a pas besoin, il lit
 // `system` (loadSystem), jamais `data`/`videos`.
 $("view").onchange = () => {
+  reinitialiserAudioPage();
   pageClips = 0;
   if ($("view").value === "live") {
     rafraichirVignettes = true;
@@ -3320,6 +3429,9 @@ function afficherFormulaireReglages(reglages) {
   $("dateFormat").value = reglages.date_format || "iso";
   $("timeFormat").value = reglages.time_format || "24h";
   $("liveProtocol").value = reglages.live_protocol;
+  $("cameraAudioEnabled").checked = reglages.camera_audio_enabled ?? false;
+  $("cameraAudioTrack").value = reglages.camera_audio_track ?? 0;
+  appliquerDependanceAudio();
   $("mergeJour").checked = reglages.merge_jour;
   $("mergeSemaine").checked = reglages.merge_semaine;
   $("mergeMois").checked = reglages.merge_mois;
@@ -3456,6 +3568,13 @@ function appliquerDependanceDownloadAuto() {
   $("cloudMinutes").disabled = !actif;
 }
 $("downloadAuto").onchange = appliquerDependanceDownloadAuto;
+
+function appliquerDependanceAudio() {
+  const actif = $("cameraAudioEnabled").checked;
+  $("cameraAudioTrack").disabled = !actif;
+  $("liveProtocol").disabled = actif;
+}
+$("cameraAudioEnabled").onchange = appliquerDependanceAudio;
 
 // Taille/couleur/opacité n'ont d'effet que si l'horodatage est incrusté :
 // grisées plutôt que retirées, même principe que les cadences ci-dessus.
@@ -3598,6 +3717,8 @@ async function envoyerFormulaireReglages({ usb, cloud, port, timezone }) {
       timestamp: $("timestamp").checked, timezone,
       date_format: $("dateFormat").value, time_format: $("timeFormat").value,
       live_protocol: $("liveProtocol").value,
+      camera_audio_enabled: $("cameraAudioEnabled").checked,
+      camera_audio_track: Number($("cameraAudioTrack").value),
       merge_jour: $("mergeJour").checked,
       merge_semaine: $("mergeSemaine").checked,
       merge_mois: $("mergeMois").checked,
@@ -3824,6 +3945,9 @@ $("list").addEventListener("click", (event) => {
     case "fullscreen":
       toggleFullscreen(name);
       break;
+    case "toggle-audio":
+      toggleAudio(name);
+      break;
     case "toggle-record":
       toggleRecord(name, cible);
       break;
@@ -4018,6 +4142,7 @@ async function trouverCleCamera(cible) {
 
 async function ouvrirDirectCamera(cible, enregistrer = false) {
   if ($("view").value !== "live") {
+    reinitialiserAudioPage();
     $("view").value = "live";
     pageClips = 0;
     rafraichirVignettes = true;
@@ -4254,6 +4379,7 @@ async function renderEvents() {
 }
 
 async function afficherEnregistrementsSonnette(evt = null) {
+  reinitialiserAudioPage();
   for (const name of nomsDirectsActifs()) stopWatch(name);
   $("view").value = "direct";
   pageClips = 0;

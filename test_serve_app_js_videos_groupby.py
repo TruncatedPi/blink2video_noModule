@@ -11,6 +11,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from test_serve_app_js_audio import audio_source
+
 from test_serve_app_js_datetime import formatting_source
 
 
@@ -31,6 +33,8 @@ class TestsGroupementVideosParJour(unittest.TestCase):
             fragments.append(correspondance.group(0))
         cls.javascript = formatting_source(source) + "\n" + "\n".join(fragments)
 
+        cls.javascript = audio_source(source) + "\n" + cls.javascript
+
     def _executer(self, videos_daily: list, group_by: str, camera_filtre: str = "") -> dict:
         script = f"""
 const h = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({{
@@ -45,7 +49,7 @@ const boxes = {{
   camera: {{ value: {camera_filtre!r} }},
   groupBy: {{ value: {group_by!r} }},
   count: {{ set textContent(v) {{}} }},
-  list: {{ innerHTML: "" }},
+  list: {{ innerHTML: "", querySelectorAll: () => [] }},
 }};
 function $(id) {{ return boxes[id]; }}
 

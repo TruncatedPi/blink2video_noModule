@@ -7,6 +7,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from test_serve_app_js_audio import audio_source
+
 from test_serve_app_js_datetime import formatting_source
 
 
@@ -31,6 +33,8 @@ class TestsPaginationClips(unittest.TestCase):
 
         cls.code = formatting_source(source) + "\n" + cls.code
 
+        cls.code = audio_source(source) + "\n" + cls.code
+
     def executer(self, actions="", total=1605, stockage=None, stockage_indisponible=False):
         script = """
 (async () => {
@@ -42,6 +46,7 @@ const localStorage = {
   getItem(k) { if (INDISPONIBLE) throw Error('storage'); return stockage[k] ?? null; },
   setItem(k,v) { if (INDISPONIBLE) throw Error('storage'); stockage[k]=v; }
 };
+const document={querySelectorAll:()=>[]};
 const boites = {view:{value:'clips'},camera:{value:''},showOut:{checked:true},
   filtre:{close(){}},count:{},filtreCompte:{},list:{innerHTML:'',scrollIntoView(){},
   querySelector(){return null;},querySelectorAll(){return [];},contains(){return true;},
@@ -69,13 +74,24 @@ const majBoutonAppliquer = () => {}, chargerSnapshots = () => {};
 const render = () => renderClips();
 """.replace("TOTAL", str(total)).replace("STOCKAGE", json.dumps(stockage or {})).replace("INDISPONIBLE", str(stockage_indisponible).lower()) + self.constants + "\n" + self.code + "\n" + self.click + "\n" + self.submit + "\n" + self.change + "\n" + actions + """
 renderClips();
-console.log(JSON.stringify({html:$('list').innerHTML,page:pageClips,size:clipsParPage,transitions,lifecycle,ordre,stockage,
+console.log(JSON.stringify({html:$('list').innerHTML,page:pageClips,size:clipsParPage,muted:lectureMuette,transitions,lifecycle,ordre,stockage,
  selected:data.clips.filter(c=>c.excludedStaged||c.supprimerStaged).map(c=>c.identity)}));
 })().catch(e=>{console.error(e);process.exitCode=1;});
 """
         r = subprocess.run([self.node, "-e", script], text=True, encoding="utf-8",
                            capture_output=True, timeout=20, check=True)
         return json.loads(r.stdout)
+
+    def test_audio_resets_on_page_or_filter_change_and_survives_refresh(self):
+        for action, muted in (
+            ("changerPageClips(1);", True),
+            ("await appliquerFiltre();", True),
+            ("await load();", False),
+            ("changerPageClips(0);", False),
+        ):
+            with self.subTest(action=action):
+                result = self.executer("lectureMuette=false;" + action)
+                self.assertEqual(result["muted"], muted)
 
     def identities(self, sortie):
         return re.findall(r'src="/media/clip/([^" ]+)"', sortie["html"])

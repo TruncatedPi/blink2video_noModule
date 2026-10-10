@@ -227,6 +227,50 @@ class DoorbellRecordingTests(unittest.TestCase):
         self.assertIn(b"moov", files[0].read_bytes())
         self.assertIn(b"moof", files[0].read_bytes())
 
+    def test_automatic_recording_saves_decodable_audio_and_advertises_both_codecs(self):
+        import av
+        live = live_fixtures.TestsSessionsDirect()
+        live.setUp()
+        self.addCleanup(live.tearDown)
+        self.settings.update(camera_audio_enabled=True, camera_audio_track=0)
+        serve._publier_evenements_sonnette([self.event], self.settings)
+
+        ffmpeg = serve.md.find_ffmpeg()
+        source = self.root / "input.ts"
+        subprocess.run([
+            ffmpeg, "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=10:duration=5",
+            "-f", "lavfi", "-i", "sine=sample_rate=16000:duration=5",
+            "-c:v", "libx264", "-g", "5", "-preset", "ultrafast",
+            "-c:a", "aac", "-ac", "1", "-b:a", "32k",
+            "-f", "mpegts", str(source)], check=True, capture_output=True, timeout=20,
+            creationflags=serve.runtime.SANS_FENETRE)
+
+        def source_av(command, **options):
+            self.assertIn("0:a:0?", command)
+            self.assertNotIn("-an", command)
+            # Keep the actual server remux flags and replace only the fake
+            # camera's TCP endpoint with a synthetic A/V transport stream.
+            command = list(command)
+            command[command.index("-i") + 1] = str(source)
+            return subprocess.Popen(command, **options, creationflags=serve.runtime.SANS_FENETRE)
+
+        with (
+            mock.patch.object(serve.Handler, "ffmpeg", ffmpeg),
+            mock.patch.object(serve.runtime, "demarrer", side_effect=source_av),
+            mock.patch.object(serve._EnregistreurSonnette, "send_header") as headers,
+        ):
+            serve._doorbell_record_loop()
+        file = next(self.root.rglob("*.mp4"))
+        self.assertEqual(serve.DOORBELL_EVENTS[0]["recording_status"], "recorded")
+        headers.assert_any_call("X-Audio", "1")
+        codec = next(call.args[1] for call in headers.call_args_list if call.args[0] == "X-Codec")
+        self.assertIn("avc1.", codec)
+        self.assertIn("mp4a.40.2", codec)
+        for media in ("audio", "video"):
+            with av.open(str(file)) as container:
+                self.assertGreater(sum(1 for _ in container.decode(**{media: 0})), 0)
+
     def test_evenement_mouvement_declenche_enregistrement_automatique(self):
         """Un événement de mouvement déclenche l'enregistrement automatique comme un appui bouton."""
         motion_event = dict(self.event, source_event_id="motion-event", id="motion-event",

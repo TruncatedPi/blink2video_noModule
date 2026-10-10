@@ -141,6 +141,7 @@ REGLAGES_DEFAUT = {"usb_minutes": 10, "cloud_minutes": 1, "port": 8765, "timesta
                    "timezone": detect_system_timezone(), "date_format": "iso", "time_format": "24h",
                    "merge_jour": True, "merge_semaine": False,
                    "merge_mois": False, "download_auto": True, "live_protocol": "webrtc",
+                   "camera_audio_enabled": False, "camera_audio_track": 0,
                    "font_size": None, "font_color": "white", "box_opacity": 0.55,
                    "trusted_host": "", "webhook_notif_url": "",
                    "live_auto_stop_seconds": 0,
@@ -278,6 +279,9 @@ def lire_reglages() -> dict:
         "download_auto": _booleen(valeurs, "download_auto", REGLAGES_DEFAUT["download_auto"]),
         "live_protocol": valeurs.get("live_protocol") if valeurs.get("live_protocol")
         in PROTOCOLES_LIVE_VALIDES else REGLAGES_DEFAUT["live_protocol"],
+        "camera_audio_enabled": _booleen(valeurs, "camera_audio_enabled",
+                                           REGLAGES_DEFAUT["camera_audio_enabled"]),
+        "camera_audio_track": _entier_borne(valeurs, "camera_audio_track", 0, 0, 1),
         "font_size": _entier_optionnel_borne(valeurs, "font_size",
                                              REGLAGES_DEFAUT["font_size"], 8, 500),
         "font_color": str(valeurs.get("font_color", REGLAGES_DEFAUT["font_color"])) or
@@ -345,6 +349,7 @@ def ecrire_reglages(usb_minutes: int, cloud_minutes: int, port: int, timestamp: 
                     doorbell_auto_record_seconds: int | None = None,
                     doorbell_chime_enabled: bool | None = None,
                     doorbell_poll_interval_seconds: int | None = None,
+                    camera_audio_enabled: bool | None = None, camera_audio_track: int | None = None,
                     date_format: str | None = None, time_format: str | None = None,
                     dossier_sorties: str | None = None,
                     dossier: Path | None = None) -> None:
@@ -374,6 +379,11 @@ def ecrire_reglages(usb_minutes: int, cloud_minutes: int, port: int, timestamp: 
         else:
             time_format = value
 
+    if camera_audio_enabled is None:
+        camera_audio_enabled = _booleen(actuel, "camera_audio_enabled", False)
+    if camera_audio_track is None:
+        camera_audio_track = _entier_borne(actuel, "camera_audio_track", 0, 0, 1)
+
     # Preserve or set doorbell settings
     if doorbell_alerts_enabled is None:
         doorbell_alerts_enabled = actuel.get("doorbell_alerts_enabled", REGLAGES_DEFAUT["doorbell_alerts_enabled"])
@@ -393,6 +403,8 @@ def ecrire_reglages(usb_minutes: int, cloud_minutes: int, port: int, timestamp: 
         "merge_jour": bool(merge_jour),
         "merge_semaine": bool(merge_semaine), "merge_mois": bool(merge_mois),
         "download_auto": bool(download_auto), "live_protocol": str(live_protocol),
+        "camera_audio_enabled": bool(camera_audio_enabled),
+        "camera_audio_track": int(camera_audio_track),
         "font_size": int(font_size) if font_size is not None else None,
         "font_color": str(font_color), "box_opacity": float(box_opacity),
         "trusted_host": str(trusted_host).strip(),

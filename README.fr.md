@@ -88,7 +88,21 @@ en rouge) : un clic pour commencer à sauvegarder le direct dans `Blink_Direct`,
 un clic pour arrêter. Les enregistrements apparaissent dans Directs
 Enregistrements, consultables et filtrables exactement comme les clips de
 détection.
-Les enregistrements du direct contiennent actuellement la vidéo sans l'audio.
+Pour inclure le son de la caméra dans le direct, les enregistrements manuels
+et les enregistrements automatiques de mouvement/sonnette, activez
+**Réglages → Vidéo → Inclure le son de la caméra dans le direct et les
+enregistrements**. Cette option est désactivée par défaut et concerne les
+nouvelles sessions. Avec le son, le direct utilise le mode compatible MSE,
+qui peut démarrer plus lentement. Utilisez **Écouter/Couper le son** dans le
+direct ou le volume du lecteur des vidéos sauvegardées. Si le canal principal
+reste silencieux, essayez **Alternatif** dans les réglages. Sans piste audio,
+la vidéo reste lisible.
+
+La lecture commence en sourdine. Activer le son d'une vidéo conserve ce choix
+et le volume pour les autres vidéos de la même page, y compris les lecteurs
+recréés pendant le défilement. Changer de vue, de page de galerie ou de filtre,
+ou recharger la page, remet la lecture en sourdine. La sourdine de lecture ne
+change pas le son enregistré. Les anciennes vidéos sans son restent sans son.
 
 Activez l'enregistrement automatique de sonnette dans Réglages → Alertes.
 Les alertes de mouvement et de bouton sont lues dans l'historique v2 de Blink,
