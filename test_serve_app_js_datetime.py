@@ -64,7 +64,13 @@ class DateTimeDisplayTests(unittest.TestCase):
         self.assertEqual(results, ["10/09/2026 12:18:20 PM"] * 3)
 
     def test_all_date_orders_and_clock_formats(self):
-        for order, date in (("iso", "2026-10-09"), ("mdy", "10/09/2026"), ("dmy", "09/10/2026")):
+        for order, date in (
+            ("iso", "2026-10-09"),
+            ("mdy", "10/09/2026"),
+            ("dmy", "09/10/2026"),
+            ("mmm_dd_yyyy", "Oct 09, 2026"),
+            ("dd_mmm_yy", "09-Oct-26"),
+        ):
             for clock, time in (("24h", "15:04:05"), ("12h", "3:04:05 PM")):
                 with self.subTest(order=order, clock=clock):
                     self.assertEqual(self.run_js('dateHeure("2026-10-09T22:04:05Z")',
@@ -123,6 +129,73 @@ const lireJSON=async r=>r;
         for name, rendered in json.loads(result.stdout).items():
             with self.subTest(view=name):
                 self.assertIn("10/09/2026 12:18:20 PM", rendered)
+
+    def test_no_storage_defaults_to_events_and_hides_or_deprioritizes_detections(self):
+        nav_consts = "\n".join(
+            re.search(rf"^{pattern}.*?;$", self.source, re.M).group(0)
+            for pattern in (
+                r"const CLE_MASQUER_DETECTIONS",
+                r"const VUES_DETECTION",
+                r"const ORDRE_VUES_STANDARD",
+                r"const ORDRE_VUES_SANS_DETECTION",
+            )
+        )
+        nav_fns = "\n".join(
+            function_source(self.source, name)
+            for name in ("detectionsDisponibles", "vueDetectionActive", "actualiserNavigationVues")
+        )
+        script = f"""
+{nav_consts}
+let masquerDetections = true;
+let data = {{
+  detection_disponible: false,
+  total_known: {{ clip: 0, direct: 2 }},
+  reglages_navigation: {{ download_auto: true, merge_jour: true, merge_semaine: false, merge_mois: false }}
+}};
+let videos = {{ daily: [], weekly: [], monthly: [] }};
+const options = ["live", "direct", "clips", "daily", "weekly", "monthly", "pictures", "events"].map(
+  (v) => ({{ value: v, hidden: false, disabled: false }})
+);
+const viewSelect = {{
+  value: "clips",
+  dataset: {{ defaultView: "events" }},
+  options,
+  append(opt) {{
+    const idx = this.options.indexOf(opt);
+    if (idx !== -1) this.options.splice(idx, 1);
+    this.options.push(opt);
+  }},
+}};
+const $ = (id) => (id === "view" ? viewSelect : null);
+{nav_fns}
+actualiserNavigationVues();
+const hiddenState = {{
+  selected: viewSelect.value,
+  order: viewSelect.options.map((o) => o.value),
+  visible: viewSelect.options.filter((o) => !o.hidden).map((o) => o.value),
+}};
+masquerDetections = false;
+actualiserNavigationVues();
+const deprioritizedState = {{
+  selected: viewSelect.value,
+  order: viewSelect.options.map((o) => o.value),
+  visible: viewSelect.options.filter((o) => !o.hidden).map((o) => o.value),
+}};
+console.log(JSON.stringify({{ hiddenState, deprioritizedState }}));
+"""
+        result = subprocess.run([self.node, "-"], input=script, text=True, encoding="utf-8",
+                                capture_output=True, check=True, timeout=10)
+        parsed = json.loads(result.stdout)
+        self.assertEqual(parsed["hiddenState"]["selected"], "events")
+        self.assertEqual(parsed["hiddenState"]["visible"], ["events", "live", "direct", "pictures"])
+        self.assertEqual(
+            parsed["deprioritizedState"]["order"],
+            ["events", "live", "direct", "pictures", "clips", "daily", "weekly", "monthly"],
+        )
+        self.assertEqual(
+            parsed["deprioritizedState"]["visible"],
+            ["events", "live", "direct", "pictures", "clips", "daily", "weekly", "monthly"],
+        )
 
 
 if __name__ == "__main__":

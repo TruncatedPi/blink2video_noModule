@@ -109,7 +109,10 @@ class DateTimeHttpTests(unittest.TestCase):
         bootstrap = json.loads(re.search(r"const AFFICHAGE_DATES = (.*);", page).group(1))
         self.assertEqual(bootstrap, {"timezone": "Etc/GMT+7", "date_format": "mdy", "time_format": "12h"})
         self.assertIn('id="dateFormat"', page)
+        self.assertIn('value="mmm_dd_yyyy"', page)
+        self.assertIn('value="dd_mmm_yy"', page)
         self.assertIn('id="timezonePacific"', page)
+        self.assertIn('data-default-view="events"', page)
 
     def test_http_validates_formats_and_preserves_omitted_preferences(self):
         settings = dict(runtime.REGLAGES_DEFAUT, date_format="mdy", time_format="12h")
@@ -121,10 +124,17 @@ class DateTimeHttpTests(unittest.TestCase):
             for field in ("date_format", "time_format"):
                 with self.subTest(field=field), self.assertRaises(self.serve._ReglagesInvalides):
                     self.serve._preparer_reglages_web({**payload, field: "bad"})
-            _, saved = self.serve._preparer_reglages_web(
-                {**payload, "date_format": "dmy", "time_format": "24h"})
-            self.assertEqual(saved["date_format"], "dmy")
-            self.assertEqual(saved["time_format"], "24h")
+            for raw_fmt, expected_fmt in (
+                ("dmy", "dmy"),
+                ("mmm_dd_yyyy", "mmm_dd_yyyy"),
+                ("dd_mmm_yy", "dd_mmm_yy"),
+                ("MMM DD, YYYY", "mmm_dd_yyyy"),
+                ("DD-MMM-YY", "dd_mmm_yy"),
+            ):
+                _, saved = self.serve._preparer_reglages_web(
+                    {**payload, "date_format": raw_fmt, "time_format": "24h"})
+                self.assertEqual(saved["date_format"], expected_fmt)
+                self.assertEqual(saved["time_format"], "24h")
 
 
 if __name__ == "__main__":

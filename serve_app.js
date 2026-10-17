@@ -77,11 +77,16 @@ function partiesInstant(instant) {
     .filter((p) => p.type !== "literal").map((p) => [p.type, p.value]));
 }
 
+const MOIS_COURTS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
 function dateLocale(jour) {
   const m = (jour || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!m) return jour || "";
   if (AFFICHAGE_DATES.date_format === "mdy") return `${m[2]}/${m[3]}/${m[1]}`;
   if (AFFICHAGE_DATES.date_format === "dmy") return `${m[3]}/${m[2]}/${m[1]}`;
+  const mois = MOIS_COURTS[Number(m[2]) - 1];
+  if (AFFICHAGE_DATES.date_format === "mmm_dd_yyyy" && mois) return `${mois} ${m[3]}, ${m[1]}`;
+  if (AFFICHAGE_DATES.date_format === "dd_mmm_yy" && mois) return `${m[3]}-${mois}-${m[1].slice(-2)}`;
   return jour;
 }
 
@@ -267,6 +272,8 @@ const I18N = {
     "reglages.dateFormat.iso": "AAAA-MM-JJ (2026-10-09)",
     "reglages.dateFormat.mdy": "MM/JJ/AAAA (10/09/2026)",
     "reglages.dateFormat.dmy": "JJ/MM/AAAA (09/10/2026)",
+    "reglages.dateFormat.mmm_dd_yyyy": "MMM JJ, AAAA (Oct 09, 2026)",
+    "reglages.dateFormat.dd_mmm_yy": "JJ-MMM-AA (09-Oct-26)",
     "reglages.timeFormat": "Format d'heure",
     "reglages.timeFormat.24h": "24 heures (15:04:05)",
     "reglages.timeFormat.12h": "12 heures (3:04:05 PM)",
@@ -379,6 +386,8 @@ const I18N = {
     "reglages.tailleCartes.grandes": "Grandes", "reglages.tailleCartes.tres_grandes": "Très grandes",
     "reglages.barrePagination": "Afficher la barre de pagination en haut de la liste",
     "reglages.barrePagination.title": "Masquée, la barre du bas de la liste reste disponible pour changer de page. Propre à ce navigateur.",
+    "reglages.masquerDetections": "Masquer les pages Détections non prises en charge ou désactivées",
+    "reglages.masquerDetections.title": "Retire Détections Enregistrements, Journalières, Hebdomadaires et Mensuelles du menu des vues lorsqu'aucun stockage (module ou abonnement) n'est disponible ou qu'elles sont désactivées. Propre à ce navigateur.",
     "reglages.masquees": "Caméras masquées",
     "reglages.masquees.hint": "Une caméra masquée disparaît des listes de cette page (clips, vidéos, photos, direct) mais continue d'enregistrer et de télécharger. Réglage propre à ce navigateur.",
     "masquees.none": "Aucune caméra connue pour l'instant.",
@@ -510,6 +519,8 @@ const I18N = {
     "reglages.dateFormat.iso": "YYYY-MM-DD (2026-10-09)",
     "reglages.dateFormat.mdy": "MM/DD/YYYY (10/09/2026)",
     "reglages.dateFormat.dmy": "DD/MM/YYYY (09/10/2026)",
+    "reglages.dateFormat.mmm_dd_yyyy": "MMM DD, YYYY (Oct 09, 2026)",
+    "reglages.dateFormat.dd_mmm_yy": "DD-MMM-YY (09-Oct-26)",
     "reglages.timeFormat": "Time format",
     "reglages.timeFormat.24h": "24 hours (15:04:05)",
     "reglages.timeFormat.12h": "12 hours (3:04:05 PM)",
@@ -622,6 +633,8 @@ const I18N = {
     "reglages.tailleCartes.grandes": "Large", "reglages.tailleCartes.tres_grandes": "Extra large",
     "reglages.barrePagination": "Show the pagination bar at the top of the list",
     "reglages.barrePagination.title": "When hidden, the bar at the bottom of the list stays available to change page. Specific to this browser.",
+    "reglages.masquerDetections": "Hide unsupported or disabled Detection pages",
+    "reglages.masquerDetections.title": "Removes Detection Recordings, Daily, Weekly, and Monthly from the view selector when no Sync Module or subscription storage is available or when they are disabled. Specific to this browser.",
     "reglages.masquees": "Hidden cameras",
     "reglages.masquees.hint": "A hidden camera disappears from the lists on this page (clips, videos, pictures, live) but keeps recording and downloading. This setting is specific to this browser.",
     "masquees.none": "No known camera yet.",
@@ -2558,6 +2571,77 @@ const CLE_BARRE_PAGINATION = "blink2video.barrePagination";
 let barrePaginationHaute = (() => {
   try { return localStorage.getItem(CLE_BARRE_PAGINATION) !== "0"; } catch (erreur) { return true; }
 })();
+const CLE_MASQUER_DETECTIONS = "blink2video.masquerDetections";
+const VUES_DETECTION = ["clips", "daily", "weekly", "monthly"];
+const ORDRE_VUES_STANDARD = ["live", "direct", "clips", "daily", "weekly", "monthly", "pictures", "events"];
+const ORDRE_VUES_SANS_DETECTION = ["events", "live", "direct", "pictures", "clips", "daily", "weekly", "monthly"];
+let masquerDetections = (() => {
+  try { return localStorage.getItem(CLE_MASQUER_DETECTIONS) !== "0"; } catch (erreur) { return true; }
+})();
+
+function detectionsDisponibles() {
+  const reg = data.reglages_navigation;
+  const videosAssemblees = (videos.daily?.length || 0) > 0
+    || (videos.weekly?.length || 0) > 0
+    || (videos.monthly?.length || 0) > 0;
+  if (reg && reg.download_auto === false) {
+    return (data.total_known?.clip || 0) > 0 || videosAssemblees;
+  }
+  if (typeof data.detection_disponible === "boolean") {
+    return data.detection_disponible || videosAssemblees;
+  }
+  if (data.total_known && typeof data.total_known.clip === "number") {
+    return data.total_known.clip > 0 || videosAssemblees;
+  }
+  return $("view")?.dataset?.defaultView !== "events";
+}
+
+function vueDetectionActive(vue) {
+  if (!VUES_DETECTION.includes(vue)) return true;
+  if (!detectionsDisponibles()) return false;
+  const reg = data.reglages_navigation;
+  if (vue === "daily" && reg && reg.merge_jour === false && !(videos.daily?.length)) return false;
+  if (vue === "weekly" && reg && reg.merge_semaine === false && !(videos.weekly?.length)) return false;
+  if (vue === "monthly" && reg && reg.merge_mois === false && !(videos.monthly?.length)) return false;
+  return true;
+}
+
+function actualiserNavigationVues() {
+  const select = $("view");
+  if (!select) return;
+  const actif = detectionsDisponibles();
+  const selectionActuelle = select.value;
+  if (select.options && select.append) {
+    const optionsParValeur = new Map([...select.options].map((opt) => [opt.value, opt]));
+    const ordre = actif ? [
+      ...ORDRE_VUES_STANDARD.filter((v) => vueDetectionActive(v)),
+      ...ORDRE_VUES_STANDARD.filter((v) => !vueDetectionActive(v)),
+    ] : ORDRE_VUES_SANS_DETECTION;
+    for (const valeur of ordre) {
+      const opt = optionsParValeur.get(valeur);
+      if (opt) select.append(opt);
+    }
+    for (const opt of select.options) {
+      if (!VUES_DETECTION.includes(opt.value)) {
+        opt.hidden = false;
+        opt.disabled = false;
+        continue;
+      }
+      const inactif = !vueDetectionActive(opt.value);
+      const masquer = masquerDetections && inactif;
+      opt.hidden = masquer;
+      opt.disabled = masquer;
+    }
+  }
+  const replierSurEvents = (!globalThis._vueChoisieManuellement && !actif && VUES_DETECTION.includes(selectionActuelle))
+    || (masquerDetections && !vueDetectionActive(selectionActuelle));
+  if (replierSurEvents) {
+    select.value = actif ? "clips" : "events";
+  } else if (selectionActuelle) {
+    select.value = selectionActuelle;
+  }
+}
+
 let clipsParPage = restaurerTaillePageClips();
 let nettoyerLecteursClips = () => {};
 
@@ -2997,6 +3081,7 @@ async function load() {
       $("camera").value = _filtrePersiste.camera;
     }
   }
+  actualiserNavigationVues();
   render();
   majBoutonAppliquer();
   chargerSnapshots();
@@ -3322,6 +3407,15 @@ $("barrePagination").onchange = () => {
   try { localStorage.setItem(CLE_BARRE_PAGINATION, barrePaginationHaute ? "1" : "0"); } catch (erreur) {}
   render();
 };
+if ($("masquerDetections")) {
+  $("masquerDetections").checked = masquerDetections;
+  $("masquerDetections").onchange = () => {
+    masquerDetections = $("masquerDetections").checked;
+    try { localStorage.setItem(CLE_MASQUER_DETECTIONS, masquerDetections ? "1" : "0"); } catch (erreur) {}
+    actualiserNavigationVues();
+    render();
+  };
+}
 $("tailleCartes").onchange = () => {
   tailleCartes = $("tailleCartes").value;
   try { localStorage.setItem(CLE_TAILLE_CARTES, tailleCartes); } catch (erreur) {}
@@ -3337,6 +3431,7 @@ majCaseMasquees();
 // rechargement complet de la page). "live" n'en a pas besoin, il lit
 // `system` (loadSystem), jamais `data`/`videos`.
 $("view").onchange = () => {
+  globalThis._vueChoisieManuellement = true;
   reinitialiserAudioPage();
   pageClips = 0;
   if ($("view").value === "live") {
@@ -3501,6 +3596,7 @@ async function ouvrirReglages(configurationInitiale = false) {
   chargerCamerasMasquees();
   $("tailleCartes").value = tailleCartes;
   $("barrePagination").checked = barrePaginationHaute;
+  $("masquerDetections").checked = masquerDetections;
   chargerSourdine();
   chargerSuppressionAuto();
   $("reglages").showModal();
@@ -3984,7 +4080,8 @@ document.querySelectorAll("[data-lang-btn]").forEach((button) => {
 // appel réseau vers /api/system dont la réponse, arrivée en retard, écrase
 // la liste de clips déjà affichée sans que le menu déroulant ne bouge (bug
 // vécu en conditions réelles : la page « repassait en Direct toute seule »).
-$("view").value = "clips";
+$("view").value = $("view").dataset?.defaultView || (detectionsDisponibles() ? "clips" : "events");
+actualiserNavigationVues();
 // Override manuel mémorisé prioritaire ; sinon la langue du navigateur, comme
 // au premier lancement de lidar2map. Placé ici, en fin de script : setLang()
 // appelle render()/renderLive(), qui référencent des `let` déclarés plus haut

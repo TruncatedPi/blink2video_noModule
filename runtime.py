@@ -161,7 +161,11 @@ REGLAGES_DEFAUT = {"usb_minutes": 10, "cloud_minutes": 1, "port": 8765, "timesta
 # soit ce choix. MJPEG deja compare a MSE une fois (audit 28.15) et son
 # code mort retire depuis (commit 7339f85) : pas reintroduit comme
 # troisieme option sans raison nouvelle.
-FORMATS_DATE_VALIDES = ("iso", "mdy", "dmy")
+FORMATS_DATE_VALIDES = ("iso", "mdy", "dmy", "mmm_dd_yyyy", "dd_mmm_yy")
+_ALIASES_FORMAT_DATE = {
+    "mmm dd, yyyy": "mmm_dd_yyyy",
+    "dd-mmm-yy": "dd_mmm_yy",
+}
 FORMATS_HEURE_VALIDES = ("24h", "12h")
 
 PROTOCOLES_LIVE_VALIDES = ("webrtc", "mse")
@@ -176,6 +180,15 @@ PROTOCOLES_LIVE_VALIDES = ("webrtc", "mse")
 # s'appuie sur cette longueur pour greffer le supplément de « start » juste
 # après (voir standard()).
 LONGUEUR_BLOC_SERVE = 7
+
+
+def normaliser_format_date(valeur) -> str | None:
+    """Retourne le code canonique du format de date, ou None s'il est inconnu."""
+    if not isinstance(valeur, str):
+        return None
+    brut = valeur.strip()
+    canonique = _ALIASES_FORMAT_DATE.get(brut.casefold(), brut)
+    return canonique if canonique in FORMATS_DATE_VALIDES else None
 
 
 def _entier_borne(valeurs: dict, champ: str, defaut: int, minimum: int,
@@ -261,6 +274,7 @@ def lire_reglages() -> dict:
         # `.get()` sur autre chose qu'un dict levait AttributeError, jamais
         # intercepté).
         return dict(REGLAGES_DEFAUT)
+    format_date = normaliser_format_date(valeurs.get("date_format"))
     return {
         "usb_minutes": _entier_borne(valeurs, "usb_minutes",
                                      REGLAGES_DEFAUT["usb_minutes"], 1),
@@ -269,8 +283,7 @@ def lire_reglages() -> dict:
         "port": _entier_borne(valeurs, "port", REGLAGES_DEFAUT["port"], 1, 65535),
         "timestamp": _booleen(valeurs, "timestamp", REGLAGES_DEFAUT["timestamp"]),
         "timezone": _fuseau_reglages(valeurs),
-        "date_format": valeurs.get("date_format") if valeurs.get("date_format")
-        in FORMATS_DATE_VALIDES else REGLAGES_DEFAUT["date_format"],
+        "date_format": format_date or REGLAGES_DEFAUT["date_format"],
         "time_format": valeurs.get("time_format") if valeurs.get("time_format")
         in FORMATS_HEURE_VALIDES else REGLAGES_DEFAUT["time_format"],
         "merge_jour": _booleen(valeurs, "merge_jour", REGLAGES_DEFAUT["merge_jour"]),

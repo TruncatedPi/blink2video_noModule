@@ -861,6 +861,57 @@ def provenances(entrees: dict) -> dict:
             for camera, sources in vues.items()}
 
 
+def _stockage_detections_actif(paths: dict | None = None,
+                               entries: dict | None = None,
+                               reglages: dict | None = None) -> bool:
+    """Indique si l'installation dispose d'un stockage de détections (USB sur
+    Sync Module ou abonnement cloud) ou de vidéos de détection déjà récupérées.
+
+    Sans stockage sur module ni abonnement (ou lorsque `download_auto` est
+    désactivé et qu'aucun clip de détection n'est connu), les pages Détections
+    restent vides : l'interface ouvre alors par défaut les Événements Sonnette."""
+    if reglages is None:
+        reglages = runtime.lire_reglages()
+    if isinstance(paths, dict) and paths.get("input") is not None and entries is None:
+        entries = read_entries(paths)
+    if entries and (nombre_clips_connus(entries) > 0 or bool(provenances(entries))):
+        return True
+    if isinstance(paths, dict):
+        for genre in ("daily", "weekly", "monthly"):
+            racine = paths.get(genre)
+            if racine is not None and racine.is_dir() and any(racine.rglob("*.mp4")):
+                return True
+    if not reglages.get("download_auto", True):
+        return False
+    blink = getattr(globals().get("BLINK"), "blink", None)
+    home = getattr(blink, "homescreen", None) if blink is not None else None
+    if isinstance(home, dict):
+        for mod in home.get("sync_modules") or []:
+            if isinstance(mod, dict) and (
+                mod.get("local_storage_enabled")
+                or mod.get("local_storage_status") == "active"
+            ):
+                return True
+        for sync in (getattr(blink, "sync", None) or {}).values():
+            ls = getattr(sync, "local_storage", None)
+            if isinstance(ls, dict) and (ls.get("enabled") or ls.get("status") == "active"):
+                return True
+    try:
+        etat_watch = json.loads(
+            (runtime.app_dir() / ".blink_watch_state.json").read_text(encoding="utf-8")
+        )
+        if isinstance(etat_watch, dict) and etat_watch.get("last_clip"):
+            return True
+    except (OSError, json.JSONDecodeError):
+        pass
+    return False
+
+
+def _vue_par_defaut(paths: dict | None = None, reglages: dict | None = None) -> str:
+    """Vue initiale : 'clips' si un stockage de détections est actif, sinon 'events'."""
+    return "clips" if _stockage_detections_actif(paths, reglages=reglages) else "events"
+
+
 def suppression_auto_choices(entrees: dict) -> list:
     """Caméras réglables, indexées par leur identité persistée et non leur nom.
 
@@ -1354,11 +1405,20 @@ def collect(paths: dict, timezone: ZoneInfo, ffmpeg: str = "",
     # tri global est nécessaire ; trier ensuite par caméra ferait passer une
     # caméra plus ancienne devant les clips récents d'une autre caméra.
     clips.sort(key=lambda clip: (clip["day"], clip["time"]), reverse=True)
+    reglages = runtime.lire_reglages()
     return {
         "clips": clips,
         "cameras": sorted({clip["camera"] for clip in clips}),
         "passages": runtime.passages(),
         "sources": provenances(entries),
+        "detection_disponible": _stockage_detections_actif(paths, entries, reglages),
+        "reglages_navigation": {
+            "download_auto": bool(reglages.get("download_auto", True)),
+            "merge_jour": bool(reglages.get("merge_jour", True)),
+            "merge_semaine": bool(reglages.get("merge_semaine", False)),
+            "merge_mois": bool(reglages.get("merge_mois", False)),
+            "doorbell_alerts_enabled": bool(reglages.get("doorbell_alerts_enabled", True)),
+        },
         # Permet à la page de dire « X clips sur Y connus » et de proposer
         # explicitement de charger le reste : quelle plage précise est active
         # (préréglage ou personnalisée) est déjà su côté page, elle seule l'a
@@ -2336,6 +2396,8 @@ def _preparer_reglages_web(payload: dict) -> tuple[str, dict]:
     for field, choices in (("date_format", runtime.FORMATS_DATE_VALIDES),
                            ("time_format", runtime.FORMATS_HEURE_VALIDES)):
         value = payload.get(field, current[field])
+        if field == "date_format":
+            value = runtime.normaliser_format_date(value) or value
         if value not in choices:
             raise _ReglagesInvalides(f"{field} : format inconnu")
         reglages[field] = value
@@ -4067,8 +4129,14 @@ class Handler(serveweb.Handler):
             settings = runtime.lire_reglages()
             date_settings = {field: settings[field] for field in ("date_format", "time_format")}
             date_settings["timezone"] = self.timezone.key
-            body = PAGE.replace("__DATE_TIME_SETTINGS__",
-                                json.dumps(date_settings).replace("<", r"\u003c")).encode("utf-8")
+            vue_defaut = _vue_par_defaut(getattr(self, "paths", None), settings)
+            body = (
+                PAGE.replace("__DATE_TIME_SETTINGS__",
+                             json.dumps(date_settings).replace("<", r"\u003c"))
+                .replace('<select id="view">',
+                         f'<select id="view" data-default-view="{vue_defaut}">', 1)
+                .encode("utf-8")
+            )
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             # La page est intégrée au script : elle change dès qu'on modifie
@@ -5395,6 +5463,11 @@ __CSS__
       <input type="checkbox" id="barrePagination"> <span data-i18n="reglages.barrePagination">Afficher la barre de
       pagination en haut de la liste</span>
     </label>
+    <label id="masquerDetectionsLabel" data-i18n-title="reglages.masquerDetections.title"
+           title="Retire Détections Enregistrements, Journalières, Hebdomadaires et Mensuelles du menu des vues lorsqu'aucun stockage (module ou abonnement) n'est disponible ou qu'elles sont désactivées. Propre à ce navigateur.">
+      <input type="checkbox" id="masquerDetections"> <span data-i18n="reglages.masquerDetections">Masquer les pages
+      Détections non prises en charge ou désactivées</span>
+    </label>
     <fieldset>
       <legend data-i18n="reglages.masquees">Caméras masquées</legend>
       <p class="sub tiny" data-i18n="reglages.masquees.hint">Une caméra masquée disparaît des listes de cette page mais continue d'enregistrer et de télécharger. Réglage propre à ce navigateur.</p>
@@ -5444,6 +5517,8 @@ __CSS__
           <option value="iso" data-i18n="reglages.dateFormat.iso">AAAA-MM-JJ (2026-10-09)</option>
           <option value="mdy" data-i18n="reglages.dateFormat.mdy">MM/JJ/AAAA (10/09/2026)</option>
           <option value="dmy" data-i18n="reglages.dateFormat.dmy">JJ/MM/AAAA (09/10/2026)</option>
+          <option value="mmm_dd_yyyy" data-i18n="reglages.dateFormat.mmm_dd_yyyy">MMM JJ, AAAA (Oct 09, 2026)</option>
+          <option value="dd_mmm_yy" data-i18n="reglages.dateFormat.dd_mmm_yy">JJ-MMM-AA (09-Oct-26)</option>
         </select>
       </div>
       <div class="champCadence">
