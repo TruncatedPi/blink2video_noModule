@@ -16,6 +16,7 @@ os.environ["BLINK_BOOTSTRAP"] = "none"
 _TEST_HOME = tempfile.TemporaryDirectory(prefix="blink-live-mse-enreg-")
 os.environ["BLINK_HOME"] = _TEST_HOME.name
 
+import merge_daily  # noqa: E402
 import serve  # noqa: E402 - bootstrap neutralisé avant import
 
 
@@ -60,12 +61,15 @@ class FauxDrapeauEnregistrement:
     de consommation de _ecrire() (constaté en écrivant ce test : le thread
     de lecture vide tout le pipe simulé quasi instantanément)."""
 
-    def __init__(self, actif_a_partir_de: int):
+    def __init__(self, actif_a_partir_de: int, inactif_a_partir_de: int | None = None):
         self._appels = 0
         self._actif_a_partir_de = actif_a_partir_de
+        self._inactif_a_partir_de = inactif_a_partir_de
 
     def is_set(self) -> bool:
         self._appels += 1
+        if self._inactif_a_partir_de is not None and self._appels >= self._inactif_a_partir_de:
+            return False
         return self._appels >= self._actif_a_partir_de
 
     def clear(self):
@@ -137,11 +141,15 @@ class TestsEnregistrementDemarreEnCoursDeDirect(unittest.TestCase):
         handler.send_error = mock.Mock()
         return handler
 
-    def _executer(self, morceaux: list, actif_a_partir_de: int):
+    def _executer(
+        self, morceaux: list, actif_a_partir_de: int, inactif_a_partir_de: int | None = None
+    ):
         pipe = FauxPipeMorceaux(morceaux + [b""])
         process = FauxProcessus(pipe)
         handler = self._handler()
-        drapeau = FauxDrapeauEnregistrement(actif_a_partir_de)
+        drapeau = FauxDrapeauEnregistrement(
+            actif_a_partir_de, inactif_a_partir_de=inactif_a_partir_de
+        )
 
         with mock.patch.object(serve, "MODULE_SLOT", threading.Semaphore(1)), \
              mock.patch.object(serve.blink_engine, "hub_lock", return_value=FauxVerrou()), \
@@ -247,6 +255,62 @@ class TestsEnregistrementDemarreEnCoursDeDirect(unittest.TestCase):
         self.assertTrue(complet)
         genres = [genre for genre, _, _ in boites]
         self.assertEqual(genres, [b"ftyp", b"moov", b"moof", b"mdat"])
+
+    def test_extraire_init_segment_isole_ftyp_et_moov_sans_reste(self):
+        """_extraire_init_segment extrait uniquement ftyp et moov."""
+        segment = _segment_synthetique()
+        reste_tronque = _fragment(1)[:60]
+        # Avec reste tronqué : seul ftyp+moov est retenu
+        self.assertEqual(serve._extraire_init_segment(segment + reste_tronque), segment)
+        # Bloc propre contenant déjà uniquement ftyp+moov : inchangé
+        self.assertEqual(serve._extraire_init_segment(segment), segment)
+
+    def test_demarrage_avec_premier_bloc_contenant_un_fragment_tronque(self):
+        """Quand le bloc initial (`first`) de 16 Ko contient le segment d'initialisation
+        ET un début de fragment tronqué (cas réel de ffmpeg), le fichier enregistré
+        ne doit contenir QUE le segment d'initialisation propre suivi des fragments complets,
+        rendant le fichier immédiatement valide selon merge_daily.valid_mp4."""
+        segment = _segment_synthetique()
+        fragment1 = _fragment(1)
+        fragment2 = _fragment(2)
+
+        milieu_f1 = len(fragment1) - 40
+        premier_bloc = segment + fragment1[:milieu_f1]
+        second_bloc = fragment1[milieu_f1:] + fragment2
+
+        # Actif dès le 1er bloc (ou 2e)
+        fichiers = self._executer([premier_bloc, second_bloc], actif_a_partir_de=1)
+
+        self.assertEqual(len(fichiers), 1)
+        contenu = fichiers[0].read_bytes()
+        # Le début tronqué de fragment1 ne doit pas polluer l'entête
+        self.assertNotIn(fragment1[:milieu_f1], contenu)
+        self.assertEqual(contenu, segment + fragment2)
+        self.assertTrue(merge_daily.valid_mp4(fichiers[0]))
+
+    def test_arret_enregistrement_tronque_au_dernier_fragment_complet(self):
+        """Quand l'enregistrement est stoppé au milieu d'un fragment (ex: mdat
+        incomplet), le fichier est tronqué précisément à la fin du dernier fragment
+        complet, évitant un mdat tronqué en queue qui invaliderait le fichier."""
+        segment = _segment_synthetique()
+        fragment1 = _fragment(1)
+        fragment2 = _fragment(2)
+
+        # 1er appel: first (segment)
+        # 2e appel: fragment1 complet (actif)
+        # 3e appel: début tronqué de fragment2 (stoppé au 3e appel)
+        morceau_tronque = fragment2[:100]
+        fichiers = self._executer(
+            [segment, fragment1, morceau_tronque],
+            actif_a_partir_de=2,
+            inactif_a_partir_de=3,
+        )
+
+        self.assertEqual(len(fichiers), 1)
+        contenu = fichiers[0].read_bytes()
+        self.assertEqual(contenu, segment + fragment1)
+        self.assertNotIn(morceau_tronque, contenu)
+        self.assertTrue(merge_daily.valid_mp4(fichiers[0]))
 
 
 if __name__ == "__main__":

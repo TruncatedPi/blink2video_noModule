@@ -1192,8 +1192,12 @@ class DetecteurDebutFragment:
 
     def __init__(self):
         self._restant_boite = 0
+        self._genre_courant = b""
         self._entete = b""
         self._entete_debute_dans_ce_bloc = False
+        self._offset_debut_entete = 0
+        self.dernier_offset_boite_complete: int | None = None
+        self.dernier_offset_fragment_complet: int | None = None
 
     def trouver_debut_fragment(self, chunk: bytes) -> int | None:
         """Retourne l'offset dans `chunk` où débute un fragment 'moof',
@@ -1202,12 +1206,18 @@ class DetecteurDebutFragment:
         position = 0
         n = len(chunk)
         premier_moof_offset = None
+        self.dernier_offset_boite_complete = None
+        self.dernier_offset_fragment_complet = None
 
         while position < n:
             if self._restant_boite > 0:
                 pris = min(self._restant_boite, n - position)
                 position += pris
                 self._restant_boite -= pris
+                if self._restant_boite == 0:
+                    self.dernier_offset_boite_complete = position
+                    if self._genre_courant == b"mdat":
+                        self.dernier_offset_fragment_complet = position
                 continue
 
             # Début d'une boîte
@@ -1231,6 +1241,7 @@ class DetecteurDebutFragment:
             offset_boite = self._offset_debut_entete
             self._entete = b""
             self._entete_debute_dans_ce_bloc = False
+            self._genre_courant = genre
 
             if genre == b"moof" and premier_moof_offset is None and est_debut_complet:
                 premier_moof_offset = offset_boite
@@ -1239,12 +1250,29 @@ class DetecteurDebutFragment:
                 self._restant_boite = 0  # boîte dégénérée : abandonne le suivi
                 break
             self._restant_boite = taille - 8
+            if self._restant_boite == 0:
+                self.dernier_offset_boite_complete = position
+                if genre == b"mdat":
+                    self.dernier_offset_fragment_complet = position
 
         return premier_moof_offset
 
     def bloc_ouvre_un_fragment(self, chunk: bytes) -> bool:
         """Vrai si un nouveau fragment 'moof' débute dans ce bloc."""
         return self.trouver_debut_fragment(chunk) is not None
+
+
+def _extraire_init_segment(segment: bytes) -> bytes:
+    """Isole ftyp + moov d'un bloc initial, sans fragments postérieurs tronqués."""
+    pos = 0
+    n = len(segment)
+    while pos + 8 <= n:
+        taille = int.from_bytes(segment[pos:pos + 4], "big")
+        genre = segment[pos + 4:pos + 8]
+        if taille < 8 or genre not in (b"ftyp", b"moov"):
+            break
+        pos += taille
+    return segment[:pos] if pos > 0 else segment
 
 
 _MOOV_CONTAINERS = {b"moov", b"trak", b"mdia", b"minf", b"stbl"}
@@ -2883,8 +2911,10 @@ class Handler(serveweb.Handler):
         self.send_header("Content-Type", "image/jpeg")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
 
     def live_failure_reason(self, stream) -> str:
         """Demande à Blink pourquoi aucune image n'arrive.
@@ -3371,7 +3401,7 @@ class Handler(serveweb.Handler):
                 # synchronisé sur tout le flux (voir sa docstring). Pas pour
                 # `first`, déjà pré-alimenté avant la boucle.
                 debut_fragment = (
-                    0 if data is first
+                    None if data is first
                     else detecteur_fragments.trouver_debut_fragment(data)
                 )
                 if desire and fichier_direct is None and debut_fragment is not None:
@@ -3393,9 +3423,15 @@ class Handler(serveweb.Handler):
                     try:
                         chemin.parent.mkdir(parents=True, exist_ok=True)
                         fichier_direct = chemin.open("wb")
-                        fichier_direct.write(first)
-                        if data is not first:
-                            fichier_direct.write(data[debut_fragment:])
+                        init_seg = _extraire_init_segment(first)
+                        fichier_direct.write(init_seg)
+                        holder["pos_valide"] = fichier_direct.tell()
+                        fichier_direct.write(data[debut_fragment:])
+                        if (detecteur_fragments.dernier_offset_fragment_complet is not None
+                                and detecteur_fragments.dernier_offset_fragment_complet >= debut_fragment):
+                            holder["pos_valide"] = len(init_seg) + (
+                                detecteur_fragments.dernier_offset_fragment_complet - debut_fragment
+                            )
                         holder["fichier_direct"] = fichier_direct
                     except OSError as error:
                         fichier_direct = None
@@ -3405,6 +3441,10 @@ class Handler(serveweb.Handler):
                         )
                 elif not desire and fichier_direct is not None:
                     try:
+                        pos = holder.get("pos_valide")
+                        if pos is not None:
+                            fichier_direct.seek(pos)
+                            fichier_direct.truncate()
                         fichier_direct.close()
                     except OSError as error:
                         _journal_direct(
@@ -3412,9 +3452,14 @@ class Handler(serveweb.Handler):
                                   f"{type(error).__name__}: {error}"
                         )
                     holder["fichier_direct"] = None
+                    holder.pop("pos_valide", None)
                 elif fichier_direct is not None:
                     try:
                         fichier_direct.write(data)
+                        if detecteur_fragments.dernier_offset_fragment_complet is not None:
+                            holder["pos_valide"] = fichier_direct.tell() - (
+                                len(data) - detecteur_fragments.dernier_offset_fragment_complet
+                            )
                     except OSError as error:
                         holder["fichier_direct"] = None
                         _journal_direct(
@@ -3485,12 +3530,18 @@ class Handler(serveweb.Handler):
             fichier_direct = holder.get("fichier_direct")
             if fichier_direct is not None:
                 try:
+                    pos = holder.get("pos_valide")
+                    if pos is not None:
+                        fichier_direct.seek(pos)
+                        fichier_direct.truncate()
                     fichier_direct.close()
                 except OSError as error:
                     journaux_nettoyage.append(
                         f"echec de fermeture de l'enregistrement, "
                         f"{type(error).__name__}: {error}"
                     )
+                holder["fichier_direct"] = None
+                holder.pop("pos_valide", None)
             stream = holder.get("stream")
             if stream is not None:
                 try:
