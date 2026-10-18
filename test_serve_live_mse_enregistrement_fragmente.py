@@ -220,6 +220,34 @@ class TestsEnregistrementDemarreEnCoursDeDirect(unittest.TestCase):
         self.assertEqual(len(fichiers), 1)
         self.assertEqual(fichiers[0].read_bytes(), segment + fragment1)
 
+    def test_demarrage_sur_fragment_debutant_au_milieu_d_un_bloc(self):
+        """Un bloc de 16 Ko peut contenir la fin d'un mdat antérieur ET le
+        début d'un nouveau fragment moof : l'enregistrement doit commencer pile
+        au début du nouveau fragment, en écartant le mdat tronqué."""
+        segment = _segment_synthetique()
+        fragment1 = _fragment(1)
+        fragment2 = _fragment(2)
+        fragment3 = _fragment(3)
+
+        milieu_mdat2 = len(fragment2) - 30
+        second_bloc = fragment1 + fragment2[:milieu_mdat2]
+        # Bloc 3 : fin du mdat2 + fragment3 complet dans le même paquet
+        troisieme_bloc = fragment2[milieu_mdat2:] + fragment3
+
+        fichiers = self._executer(
+            [segment, second_bloc, troisieme_bloc],
+            actif_a_partir_de=3,
+        )
+
+        self.assertEqual(len(fichiers), 1)
+        contenu = fichiers[0].read_bytes()
+        self.assertNotIn(fragment2[milieu_mdat2:], contenu)
+        self.assertEqual(contenu, segment + fragment3)
+        boites, complet = _parser_boites_top_level(contenu)
+        self.assertTrue(complet)
+        genres = [genre for genre, _, _ in boites]
+        self.assertEqual(genres, [b"ftyp", b"moov", b"moof", b"mdat"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
