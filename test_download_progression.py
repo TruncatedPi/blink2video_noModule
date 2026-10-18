@@ -539,7 +539,7 @@ class ProgressionInterfaceTests(unittest.TestCase):
                      runtime, "self_command", side_effect=lambda *args: list(args),
                  ), mock.patch.object(
                      runtime, "lire_reglages",
-                     return_value=reglages or dict(runtime.REGLAGES_DEFAUT),
+                     return_value=dict(runtime.REGLAGES_DEFAUT, timezone="Europe/Paris") if reglages is None else reglages,
                  ):
                 serve.Handler.run_refresh(faux)
         return commandes
@@ -593,7 +593,7 @@ class ProgressionInterfaceTests(unittest.TestCase):
         soient les réglages de la page."""
         reglages_tout_actif = {
             **runtime.REGLAGES_DEFAUT,
-            "timestamp": True, "merge_semaine": True, "merge_mois": True,
+            "timezone": "Europe/Paris", "timestamp": True, "merge_semaine": True, "merge_mois": True,
         }
         self.assertEqual(
             self._commandes_actualisation(None, reglages_tout_actif),

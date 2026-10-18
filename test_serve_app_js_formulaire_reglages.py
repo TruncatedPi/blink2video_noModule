@@ -26,7 +26,7 @@ REGLAGES = {
     "doorbell_auto_record": False,
     "doorbell_auto_record_seconds": 30,
     "doorbell_chime_enabled": True,
-    "doorbell_poll_interval_seconds": 6,
+    "doorbell_poll_interval_seconds": 30,
 }
 
 
@@ -37,7 +37,7 @@ class TestsFormulaireReglages(unittest.TestCase):
         if cls.node is None:
             raise unittest.SkipTest("node introuvable")
         source = (Path(__file__).parent / "serve_app.js").read_text(encoding="utf-8")
-        debut = source.index('$("timezonePacific").onclick')
+        debut = source.index('let portActuel = null;')
         fin = source.index('$("filtreButton").onclick', debut)
         fragments = [source[debut:fin]]
         for nom in ("lireJSON", "appliquerDependanceMergeJour", "appliquerDependanceDownloadAuto",
@@ -67,7 +67,7 @@ let rechargements = 0, reponseCourante, libererGet;
 const attenteListes = new Promise(() => {});
 const ids = [
   'usbMinutes', 'cloudMinutes', 'port', 'storageDir', 'timestamp', 'timezone',
-  'dateFormat', 'timeFormat', 'timezonePacific', 'cameraAudioEnabled', 'cameraAudioTrack',
+  'dateFormat', 'timeFormat', 'cameraAudioEnabled', 'cameraAudioTrack',
   'liveProtocol', 'mergeJour', 'mergeSemaine', 'mergeMois', 'downloadAuto',
   'initialSetupHint', 'reglagesClose', 'stopButton', 'reglages', 'reglagesButton',
   'webhookUrl', 'webhookRegenerer', 'fontSize', 'fontColor', 'boxOpacity',

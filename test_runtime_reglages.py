@@ -119,7 +119,7 @@ class TestsReglages(unittest.TestCase):
              "doorbell_auto_record": False,
              "doorbell_auto_record_seconds": 30,
              "doorbell_chime_enabled": True,
-             "doorbell_poll_interval_seconds": 6,
+             "doorbell_poll_interval_seconds": 30,
              "dossier_sorties": ""})
 
     def test_valeurs_partielles_completees_par_les_defauts(self):

@@ -30,7 +30,7 @@ DEFAUTS = {
     "doorbell_auto_record": False,
     "doorbell_auto_record_seconds": 30,
     "doorbell_chime_enabled": True,
-    "doorbell_poll_interval_seconds": 6,
+    "doorbell_poll_interval_seconds": 30,
 }
 CHAMPS_BOOLEENS = (
     "timestamp", "merge_jour", "merge_semaine", "merge_mois", "download_auto")
@@ -151,7 +151,7 @@ class TestsValidationReglagesHttp(unittest.TestCase):
             "doorbell_auto_record": False,
             "doorbell_auto_record_seconds": 30,
             "doorbell_chime_enabled": True,
-            "doorbell_poll_interval_seconds": 6,
+            "doorbell_poll_interval_seconds": 30,
         }, "archives locales")
         self.chemin.assert_called_once_with("archives locales")
 

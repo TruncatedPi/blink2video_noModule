@@ -284,13 +284,13 @@ WEBRTC_START_MAX_SECONDS = (
 )
 
 # Doorbell events state and monitor (Feature 1: Doorbell event alerts and live recording)
-DOORBELL_EVENTS_FILE = Path(".blink_doorbell_events.json")
+DOORBELL_EVENTS_FILE = runtime.EVENEMENTS_SONNETTE
 
 
 def _charger_evenements_sonnette() -> list[dict]:
     """Loads stored doorbell events from disk."""
     try:
-        cible = runtime.app_dir() / DOORBELL_EVENTS_FILE
+        cible = runtime.fichier_evenements_sonnette()
         if cible.is_file():
             data = json.loads(cible.read_text(encoding="utf-8"))
             if isinstance(data, dict):
@@ -318,24 +318,30 @@ def _charger_evenements_sonnette() -> list[dict]:
 def _sauvegarder_evenements_sonnette(events: list[dict]) -> None:
     """Saves doorbell events to disk atomically."""
     try:
-        cible = runtime.app_dir() / DOORBELL_EVENTS_FILE
+        cible = runtime.fichier_evenements_sonnette()
         runtime._ecrire_texte_atomique(cible, json.dumps(
             {"version": 2, "events": events[-100:], "seen": DOORBELL_SEEN_EVENTS}, indent=2))
     except Exception:
         pass
 
 
+def _charger_evenements_vus() -> dict[str, float]:
+    try:
+        cible = runtime.fichier_evenements_sonnette()
+        if cible.is_file():
+            _doorbell_saved = json.loads(cible.read_text(encoding="utf-8"))
+            if isinstance(_doorbell_saved, dict) and isinstance(_doorbell_saved.get("seen"), dict):
+                return {key: expiry for key, expiry in _doorbell_saved["seen"].items()
+                        if isinstance(key, str) and isinstance(expiry, (int, float))
+                        and time.time() < expiry <= time.time() + 600}
+    except (OSError, ValueError):
+        pass
+    return {}
+
+
 DOORBELL_EVENTS: list[dict] = _charger_evenements_sonnette()
 DOORBELL_EVENTS_LOCK = threading.Lock()
-DOORBELL_SEEN_EVENTS: dict[str, float] = {}
-try:
-    _doorbell_saved = json.loads((runtime.app_dir() / DOORBELL_EVENTS_FILE).read_text(encoding="utf-8"))
-    if isinstance(_doorbell_saved, dict) and isinstance(_doorbell_saved.get("seen"), dict):
-        DOORBELL_SEEN_EVENTS = {key: expiry for key, expiry in _doorbell_saved["seen"].items()
-                               if isinstance(key, str) and isinstance(expiry, (int, float))
-                               and time.time() < expiry <= time.time() + 600}
-except (OSError, ValueError):
-    pass
+DOORBELL_SEEN_EVENTS: dict[str, float] = _charger_evenements_vus()
 DOORBELL_MONITOR_ERROR = ""
 DOORBELL_MONITOR_STOP = threading.Event()
 DOORBELL_MONITOR_THREAD: threading.Thread | None = None
@@ -505,7 +511,7 @@ def _doorbell_monitor_loop() -> None:
     global DOORBELL_MONITOR_ERROR
     while not DOORBELL_MONITOR_STOP.is_set():
         reglages = runtime.lire_reglages()
-        interval = max(2, int(reglages.get("doorbell_poll_interval_seconds", 6)))
+        interval = max(2, int(reglages.get("doorbell_poll_interval_seconds", 30)))
         if reglages.get("doorbell_alerts_enabled", True):
             try:
                 events = BLINK.call(_poll_doorbells_async, timeout=30)
@@ -522,6 +528,9 @@ def demarrer_moniteur_evenements() -> None:
     """Starts the background doorbell event monitor thread."""
     global DOORBELL_MONITOR_THREAD, DOORBELL_RECORD_THREAD
     DOORBELL_MONITOR_STOP.clear()
+    with DOORBELL_EVENTS_LOCK:
+        if not DOORBELL_EVENTS:
+            DOORBELL_EVENTS.extend(_charger_evenements_sonnette())
     if DOORBELL_MONITOR_THREAD is None or not DOORBELL_MONITOR_THREAD.is_alive():
         DOORBELL_MONITOR_THREAD = threading.Thread(
             target=_doorbell_monitor_loop,
@@ -2884,12 +2893,13 @@ class Handler(serveweb.Handler):
 
         state = BLINK.call(read, timeout=60)
         state["webrtc"] = WEBRTC_ACTIF
-        state["camera_audio_enabled"] = runtime.lire_reglages()["camera_audio_enabled"]
+        reglages = runtime.lire_reglages()
+        state["camera_audio_enabled"] = bool(reglages.get("camera_audio_enabled", False))
         # Relu a chaque appel, contrairement a WEBRTC_ACTIF (fige a l'import
         # du process) : un changement depuis les Reglages redemarre deja le
         # serveur, mais watchLive() lit ce champ pendant un direct deja en
         # cours, bien apres ce redemarrage-la.
-        state["live_auto_stop_seconds"] = runtime.lire_reglages()["live_auto_stop_seconds"]
+        state["live_auto_stop_seconds"] = reglages.get("live_auto_stop_seconds", 0)
         return state
 
     def set_armed(self, scope: str, identity: str, armed: bool) -> None:
@@ -5490,10 +5500,9 @@ __CSS__
         <label for="timezone" data-i18n="reglages.timezone">Fuseau horaire</label>
         <input type="text" id="timezone" list="fuseauxCourants" placeholder="UTC">
       </div>
-      <button type="button" id="timezonePacific" data-i18n="reglages.timezone.pacificFixed">Pacifique UTC−07:00 (sans changement d'heure)</button>
-      <p class="sub tiny" data-i18n="reglages.timezone.hint">Ce fuseau s'applique aux événements, vidéos, photos et regroupements. Pacifique fixe reste à UTC−07:00 toute l'année.</p>
+      <p class="sub tiny" data-i18n="reglages.timezone.hint">Ce fuseau s'applique aux événements, vidéos, photos et regroupements.</p>
       <datalist id="fuseauxCourants">
-        <option value="Etc/GMT+7" data-i18n="reglages.timezone.pacificFixed">Pacifique UTC−07:00 (sans changement d'heure)</option>
+        <option value="America/Phoenix">
         <option value="Europe/Paris">
         <option value="Europe/London">
         <option value="Europe/Brussels">
@@ -5697,7 +5706,7 @@ __CSS__
       </div>
       <div class="champCadence">
         <label for="doorbellPollSeconds" data-i18n="reglages.doorbellPollSeconds">Intervalle de lecture des événements (secondes)</label>
-        <input type="number" id="doorbellPollSeconds" min="2" max="60" placeholder="6">
+        <input type="number" id="doorbellPollSeconds" min="2" max="300" placeholder="30">
       </div>
       <div style="margin-top: 8px;">
         <button type="button" id="btnTestDoorbellAlert" data-i18n="doorbell.test">Tester l'alerte de sonnette</button>

@@ -66,7 +66,7 @@ const elements = Object.fromEntries(Object.entries({
   storageDir: ' clips ', liveProtocol: 'mse',
   fontSize: '', fontColor: 'white', boxOpacity: '0.55',
   trustedHost: '100.101.194.5', webhookNotifUrl: 'https://exemple.invalid/notif',
-  liveAutoStopSeconds: '0', doorbellAutoRecordSeconds: '30', doorbellPollSeconds: '6',
+  liveAutoStopSeconds: '0', doorbellAutoRecordSeconds: '30', doorbellPollSeconds: '30',
 }).map(([id, value]) => [id, {value}]));
 for (const [id, checked] of Object.entries({
   cameraAudioEnabled: true, timestamp: true, mergeJour: true, mergeSemaine: false,
@@ -246,7 +246,7 @@ function instantane() {
             "doorbell_chime_enabled": True,
             "doorbell_auto_record": False,
             "doorbell_auto_record_seconds": 30,
-            "doorbell_poll_interval_seconds": 6,
+            "doorbell_poll_interval_seconds": 30,
         })
         self._verifier_attente(resultat["apresPost"], 2000, 45000)
         self.assertEqual(resultat["alertes"], [])

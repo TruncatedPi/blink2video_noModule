@@ -91,7 +91,7 @@ class TestDoorbellEvents(unittest.TestCase):
         self.assertFalse(settings["doorbell_auto_record"])
         self.assertEqual(settings["doorbell_auto_record_seconds"], 30)
         self.assertTrue(settings["doorbell_chime_enabled"])
-        self.assertEqual(settings["doorbell_poll_interval_seconds"], 6)
+        self.assertEqual(settings["doorbell_poll_interval_seconds"], 30)
 
     def test_preparer_reglages_web_validation(self) -> None:
         """Validates sanitization and limits in _preparer_reglages_web."""

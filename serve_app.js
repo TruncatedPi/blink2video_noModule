@@ -277,8 +277,7 @@ const I18N = {
     "reglages.timeFormat": "Format d'heure",
     "reglages.timeFormat.24h": "24 heures (15:04:05)",
     "reglages.timeFormat.12h": "12 heures (3:04:05 PM)",
-    "reglages.timezone.pacificFixed": "Pacifique UTC−07:00 (sans changement d'heure)",
-    "reglages.timezone.hint": "Ce fuseau s'applique aux événements, vidéos, photos et regroupements. Pacifique fixe reste à UTC−07:00 toute l'année.",
+    "reglages.timezone.hint": "Ce fuseau s'applique aux événements, vidéos, photos et regroupements.",
     "reglages.liveProtocol": "Protocole du direct",
     "reglages.liveProtocol.webrtc": "WebRTC (rapide)",
     "reglages.liveProtocol.mse": "MSE (compatible)",
@@ -524,8 +523,7 @@ const I18N = {
     "reglages.timeFormat": "Time format",
     "reglages.timeFormat.24h": "24 hours (15:04:05)",
     "reglages.timeFormat.12h": "12 hours (3:04:05 PM)",
-    "reglages.timezone.pacificFixed": "Pacific UTC−07:00 (no DST)",
-    "reglages.timezone.hint": "This time zone applies to events, videos, pictures and day grouping. Fixed Pacific stays at UTC−07:00 all year.",
+    "reglages.timezone.hint": "This time zone applies to events, videos, pictures and day grouping.",
     "reglages.liveProtocol": "Live view protocol",
     "reglages.liveProtocol.webrtc": "WebRTC (fast)",
     "reglages.liveProtocol.mse": "MSE (compatible)",
@@ -3502,8 +3500,6 @@ $("autostart").onchange = async () => {
 const dateVersionEl = $("versionTimestamp");
 if (dateVersionEl) dateVersionEl.textContent = dateHeure(dateVersionEl.dateTime, false);
 
-$("timezonePacific").onclick = () => { $("timezone").value = "Etc/GMT+7"; };
-
 let portActuel = null;   // relu à chaque ouverture, comparé à l'envoi
 
 function afficherFormulaireReglages(reglages) {
@@ -3538,7 +3534,7 @@ function afficherFormulaireReglages(reglages) {
     $("doorbellChimeEnabled").checked = reglages.doorbell_chime_enabled ?? true;
     $("doorbellAutoRecord").checked = reglages.doorbell_auto_record ?? false;
     $("doorbellAutoRecordSeconds").value = reglages.doorbell_auto_record_seconds || 30;
-    if ($("doorbellPollSeconds")) $("doorbellPollSeconds").value = reglages.doorbell_poll_interval_seconds || 6;
+    if ($("doorbellPollSeconds")) $("doorbellPollSeconds").value = reglages.doorbell_poll_interval_seconds || 30;
   }
   afficherUrlWebhook(reglages.webhook_token);
 }

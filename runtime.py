@@ -89,11 +89,16 @@ def detect_system_timezone() -> str:
             if no_dst:
                 offset = dt.datetime.now().astimezone().utcoffset()
                 hours = offset.total_seconds() / 3600 if offset is not None else None
+                if hours == -7:
+                    return "America/Phoenix"
                 if hours is not None and hours.is_integer():
                     name = "UTC" if hours == 0 else f"Etc/GMT{-int(hours):+d}"
-                    from zoneinfo import ZoneInfo
-                    ZoneInfo(name)
-                    return name
+                    try:
+                        from zoneinfo import ZoneInfo
+                        ZoneInfo(name)
+                        return name
+                    except Exception:
+                        pass
             win_map = {
                 "Pacific Standard Time": "America/Los_Angeles",
                 "Mountain Standard Time": "America/Denver",
@@ -137,6 +142,14 @@ def detect_system_timezone() -> str:
 # le manifeste USB réveille le module de synchronisation, l'assemblage ne fait
 # rien quand rien n'a changé. Verbeux à lire, jamais à taper.
 REGLAGES = "blink_reglages.json"
+EVENEMENTS_SONNETTE = ".blink_doorbell_events.json"
+
+
+def fichier_evenements_sonnette(dossier: Path | None = None) -> Path:
+    """Emplacement du registre d'événements de sonnette sous app_dir()."""
+    return (app_dir() if dossier is None else dossier) / EVENEMENTS_SONNETTE
+
+
 REGLAGES_DEFAUT = {"usb_minutes": 10, "cloud_minutes": 1, "port": 8765, "timestamp": False,
                    "timezone": detect_system_timezone(), "date_format": "iso", "time_format": "24h",
                    "merge_jour": True, "merge_semaine": False,
@@ -150,7 +163,7 @@ REGLAGES_DEFAUT = {"usb_minutes": 10, "cloud_minutes": 1, "port": 8765, "timesta
                    "doorbell_auto_record": False,
                    "doorbell_auto_record_seconds": 30,
                    "doorbell_chime_enabled": True,
-                   "doorbell_poll_interval_seconds": 6,
+                   "doorbell_poll_interval_seconds": 30,
                    # Vide : dossier par défaut, voir dossier_sorties().
                    "dossier_sorties": ""}
 # Remplace la variable d'environnement BLINK_DIRECT_WEBRTC (experimentale,
@@ -324,7 +337,7 @@ def lire_reglages() -> dict:
             REGLAGES_DEFAUT["doorbell_chime_enabled"]),
         "doorbell_poll_interval_seconds": _entier_borne(
             valeurs, "doorbell_poll_interval_seconds",
-            REGLAGES_DEFAUT["doorbell_poll_interval_seconds"], 2, 60),
+            REGLAGES_DEFAUT["doorbell_poll_interval_seconds"], 2, 300),
         "dossier_sorties": str(valeurs.get("dossier_sorties") or "").strip(),
     }
 

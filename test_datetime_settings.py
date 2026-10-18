@@ -27,7 +27,7 @@ class DateTimeSettingsTests(unittest.TestCase):
 
     def test_format_preferences_round_trip_and_survive_older_callers(self):
         settings = runtime.lire_reglages()
-        settings.update(timezone="Etc/GMT+7", date_format="mdy", time_format="12h")
+        settings.update(timezone="America/Phoenix", date_format="mdy", time_format="12h")
         runtime.ecrire_reglages(**settings)
         self.assertEqual(runtime.lire_reglages(), settings)
         settings.pop("date_format")
@@ -36,7 +36,7 @@ class DateTimeSettingsTests(unittest.TestCase):
         reread = runtime.lire_reglages()
         self.assertEqual(reread["date_format"], "mdy")
         self.assertEqual(reread["time_format"], "12h")
-        self.assertEqual(reread["timezone"], "Etc/GMT+7")
+        self.assertEqual(reread["timezone"], "America/Phoenix")
 
     def test_bad_formats_fall_back_to_safe_defaults(self):
         for value in (None, [], {}, "unknown", 12):
@@ -62,7 +62,7 @@ class DateTimeSettingsTests(unittest.TestCase):
              mock.patch.dict(os.environ, {"TZ": ""}), \
              mock.patch.dict(sys.modules, {"winreg": registry}), \
              mock.patch.object(runtime.dt, "datetime", clock):
-            self.assertEqual(runtime.detect_system_timezone(), "Etc/GMT+7")
+            self.assertEqual(runtime.detect_system_timezone(), "America/Phoenix")
 
     def test_build_timestamp_retains_commit_offset_for_ui_conversion(self):
         process = mock.Mock(returncode=0, stdout="2026-10-09T15:34:55-07:00\n")
@@ -72,7 +72,7 @@ class DateTimeSettingsTests(unittest.TestCase):
             self.assertEqual(runtime.git_commit_timestamp(), "")
 
     def test_fixed_zone_server_offset_is_identical_in_winter_and_summer(self):
-        zone = ZoneInfo("Etc/GMT+7")
+        zone = ZoneInfo("America/Phoenix")
         for month in (1, 7, 11):
             local = dt.datetime(2026, month, 15, 19, 18, 20, tzinfo=dt.timezone.utc).astimezone(zone)
             self.assertEqual(local.utcoffset(), dt.timedelta(hours=-7))
@@ -94,7 +94,7 @@ class DateTimeHttpTests(unittest.TestCase):
     def test_page_bootstrap_has_formats_and_actual_server_zone(self):
         handler = object.__new__(self.serve.Handler)
         handler.path = "/"
-        handler.timezone = ZoneInfo("Etc/GMT+7")
+        handler.timezone = ZoneInfo("America/Phoenix")
         handler.wfile = io.BytesIO()
         handler.hote_autorise = mock.Mock(return_value=True)
         handler.send_response = mock.Mock()
@@ -107,16 +107,16 @@ class DateTimeHttpTests(unittest.TestCase):
         page = handler.wfile.getvalue().decode("utf-8")
         self.assertNotIn("__DATE_TIME_SETTINGS__", page)
         bootstrap = json.loads(re.search(r"const AFFICHAGE_DATES = (.*);", page).group(1))
-        self.assertEqual(bootstrap, {"timezone": "Etc/GMT+7", "date_format": "mdy", "time_format": "12h"})
+        self.assertEqual(bootstrap, {"timezone": "America/Phoenix", "date_format": "mdy", "time_format": "12h"})
         self.assertIn('id="dateFormat"', page)
         self.assertIn('value="mmm_dd_yyyy"', page)
         self.assertIn('value="dd_mmm_yy"', page)
-        self.assertIn('id="timezonePacific"', page)
+        self.assertIn('value="America/Phoenix"', page)
         self.assertIn('data-default-view="events"', page)
 
     def test_http_validates_formats_and_preserves_omitted_preferences(self):
         settings = dict(runtime.REGLAGES_DEFAUT, date_format="mdy", time_format="12h")
-        payload = dict(usb_minutes=10, cloud_minutes=1, port=8765, timezone="Etc/GMT+7")
+        payload = dict(usb_minutes=10, cloud_minutes=1, port=8765, timezone="America/Phoenix")
         with mock.patch.object(runtime, "lire_reglages", return_value=settings):
             _, saved = self.serve._preparer_reglages_web(payload)
             self.assertEqual(saved["date_format"], "mdy")
