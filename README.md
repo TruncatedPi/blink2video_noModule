@@ -345,6 +345,17 @@ The page, at `127.0.0.1:8765`, has six views:
   view stops on its own: as soon as you close or reload the tab, after
   5 minutes at most in any case (a server-side cap, whatever the browser
   does), or earlier if you set "Auto-stop live view" in Settings.
+  The "Rotation…" button shows the cameras one after another in
+  fullscreen, for a wall screen for instance: each one stays for the
+  number of seconds you choose (30 by default), counted from its first
+  image, then the next one takes over, and the rotation starts again.
+  Offline and hidden cameras are skipped, you can leave others out, and
+  you can limit it to hours of the day; outside them it waits without
+  waking anything. Esc or "Stop" ends it. Each turn wakes the camera, so
+  battery cameras drain fast, and while it runs the local storage (USB)
+  downloads wait for a pause or the end, since the Sync Module relays one
+  thing at a time. These settings are kept in the browser, like the
+  thumbnail size.
 - **Clips**: newest first, with a preview and an "Écarter" button that removes a
   clip from every assembled video.
 - **Daily, Weekly, Monthly**: the assembled videos. Daily can also be grouped
@@ -442,9 +453,14 @@ only, so a camera you knowingly leave offline warns you once.
 
 When a newer release exists, the interface shows an **Install 0.x.y** button.
 It does everything: download, stop, replace, start again, with whatever verbs
-were running. Nothing is replaced until the new version has started and stated
-its own version number, and the previous files are kept aside until the swap
-succeeds.
+were running. The downloaded version must first start and state its own
+version number; the whole folder is then swapped, and if the new version does
+not hold after the restart, the previous one is put back.
+
+If a power cut strikes at the wrong moment and the `blink2video` folder is gone,
+the previous version is waiting next to it as `.blink2video.backup-…`: rename
+that folder to `blink2video` and start again. Your settings and clips do not
+depend on it, they live elsewhere.
 
 ## Where files go
 

@@ -375,6 +375,17 @@ La page, sur `127.0.0.1:8765`, a six vues :
   est fermé ou rechargé, au bout de 5 minutes au plus dans tous les cas (un
   plafond côté serveur, quoi que fasse le navigateur), ou plus tôt si
   « Arrêt auto du direct » est réglé dans les Réglages.
+  Le bouton « Ronde… » montre les caméras l'une après l'autre en plein
+  écran, pour un écran mural par exemple : chacune reste le nombre de
+  secondes choisi (30 par défaut), compté à partir de sa première image,
+  puis la suivante prend sa place, et la ronde recommence. Les caméras hors
+  ligne ou masquées sont sautées, on peut en écarter d'autres, et la
+  limiter à certaines heures de la journée ; en dehors, elle attend sans
+  rien réveiller. Échap ou « Arrêter » y mettent fin. Chaque passage
+  réveille la caméra, ce qui use vite une batterie, et tant que la ronde
+  tourne, la relève du stockage local (clé USB) attend sa pause ou son
+  arrêt, le Sync Module ne relayant qu'une chose à la fois. Ces réglages
+  restent dans le navigateur, comme la taille des vignettes.
 - **Clips** : du plus récent au plus ancien, avec un aperçu et un bouton
   « Écarter » qui retire un clip de toutes les vidéos assemblées.
 - **Journalières, Hebdomadaires, Mensuelles** : les vidéos assemblées. Les
@@ -480,9 +491,14 @@ hors ligne ne prévient qu'une fois.
 
 Quand une version plus récente est publiée, l'interface affiche un bouton
 **Installer 0.x.y**. Il s'occupe de tout : téléchargement, arrêt, remplacement,
-relance des mêmes verbes. Rien n'est remplacé tant que la nouvelle version n'a
-pas démarré et annoncé son numéro, et les fichiers précédents sont gardés de
-côté jusqu'à ce que la permutation aboutisse.
+relance des mêmes verbes. La version téléchargée doit d'abord démarrer et
+annoncer son numéro ; le dossier entier est alors échangé, et si la nouvelle
+version ne tient pas après la relance, l'ancienne est remise en place.
+
+Si une coupure de courant tombe au mauvais moment et que le dossier
+`blink2video` a disparu, l'ancienne version attend à côté, sous le nom
+`.blink2video.backup-…` : renommez ce dossier en `blink2video` et relancez.
+Vos réglages et vos clips n'en dépendent pas, ils vivent ailleurs.
 
 ## Où vont les fichiers
 
