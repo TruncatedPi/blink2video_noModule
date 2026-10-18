@@ -2911,6 +2911,7 @@ class Handler(serveweb.Handler):
         self.send_header("Content-Type", "image/jpeg")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
         try:
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
@@ -4980,6 +4981,7 @@ __CSS__
         <option value="Asia/Tokyo">
         <option value="Australia/Sydney">
         <option value="UTC">
+      </datalist>
       <div class="champCadence">
         <label for="liveProtocol" data-i18n="reglages.liveProtocol">Protocole du direct</label>
         <select id="liveProtocol">

@@ -11,8 +11,6 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from test_serve_app_js_audio import audio_source
-
 
 class TestsGroupementVideosParJour(unittest.TestCase):
     @classmethod
@@ -29,7 +27,7 @@ class TestsGroupementVideosParJour(unittest.TestCase):
             if correspondance is None:
                 raise AssertionError(f"fonction {nom}() introuvable")
             fragments.append(correspondance.group(0))
-        cls.javascript = audio_source(source) + "\n" + "\n".join(fragments)
+        cls.javascript = "\n".join(fragments)
 
     def _executer(self, videos_daily: list, group_by: str, camera_filtre: str = "") -> dict:
         script = f"""
@@ -45,7 +43,7 @@ const boxes = {{
   camera: {{ value: {camera_filtre!r} }},
   groupBy: {{ value: {group_by!r} }},
   count: {{ set textContent(v) {{}} }},
-  list: {{ innerHTML: "", querySelectorAll: () => [] }},
+  list: {{ innerHTML: "" }},
 }};
 function $(id) {{ return boxes[id]; }}
 
