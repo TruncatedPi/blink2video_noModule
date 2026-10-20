@@ -65,7 +65,7 @@ const signalerDirect = () => {};
 const failWatch = (name, message) => failures.push({name, message});
 const repos = () => 'repos';
 const lireJSON = r => r.json();
-const document={querySelectorAll:()=>[]};
+const document = {querySelectorAll: () => []};
 let system = {webrtc: true, systems: []};
 class Video extends EventTarget {
   constructor() { super(); this.srcObject = null; this.readyState = 0; this.videoWidth = 0; }

@@ -306,7 +306,7 @@ def lire_reglages() -> dict:
         "live_protocol": valeurs.get("live_protocol") if valeurs.get("live_protocol")
         in PROTOCOLES_LIVE_VALIDES else REGLAGES_DEFAUT["live_protocol"],
         "camera_audio_enabled": _booleen(valeurs, "camera_audio_enabled",
-                                           REGLAGES_DEFAUT["camera_audio_enabled"]),
+                                         REGLAGES_DEFAUT["camera_audio_enabled"]),
         "camera_audio_track": _entier_borne(valeurs, "camera_audio_track", 0, 0, 1),
         "font_size": _entier_optionnel_borne(valeurs, "font_size",
                                              REGLAGES_DEFAUT["font_size"], 8, 500),
@@ -366,6 +366,8 @@ def _ecrire_texte_atomique(cible: Path, contenu: str) -> None:
 def ecrire_reglages(usb_minutes: int, cloud_minutes: int, port: int, timestamp: bool,
                     timezone: str, merge_jour: bool, merge_semaine: bool,
                     merge_mois: bool, download_auto: bool, live_protocol: str, *,
+                    camera_audio_enabled: bool | None = None,
+                    camera_audio_track: int | None = None,
                     font_size: int | None = None, font_color: str = "white",
                     box_opacity: float = 0.55, trusted_host: str = "",
                     webhook_notif_url: str = "",
@@ -375,7 +377,6 @@ def ecrire_reglages(usb_minutes: int, cloud_minutes: int, port: int, timestamp: 
                     doorbell_auto_record_seconds: int | None = None,
                     doorbell_chime_enabled: bool | None = None,
                     doorbell_poll_interval_seconds: int | None = None,
-                    camera_audio_enabled: bool | None = None, camera_audio_track: int | None = None,
                     date_format: str | None = None, time_format: str | None = None,
                     dossier_sorties: str | None = None,
                     dossier: Path | None = None) -> None:
@@ -404,7 +405,6 @@ def ecrire_reglages(usb_minutes: int, cloud_minutes: int, port: int, timestamp: 
             date_format = value
         else:
             time_format = value
-
     if camera_audio_enabled is None:
         camera_audio_enabled = _booleen(actuel, "camera_audio_enabled", False)
     if camera_audio_track is None:
@@ -421,7 +421,6 @@ def ecrire_reglages(usb_minutes: int, cloud_minutes: int, port: int, timestamp: 
         doorbell_chime_enabled = actuel.get("doorbell_chime_enabled", REGLAGES_DEFAUT["doorbell_chime_enabled"])
     if doorbell_poll_interval_seconds is None:
         doorbell_poll_interval_seconds = actuel.get("doorbell_poll_interval_seconds", REGLAGES_DEFAUT["doorbell_poll_interval_seconds"])
-
     _ecrire_texte_atomique(cible, json.dumps({
         "usb_minutes": int(usb_minutes), "cloud_minutes": int(cloud_minutes),
         "port": int(port), "timestamp": bool(timestamp),

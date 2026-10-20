@@ -33,6 +33,8 @@ and the main settings.
 ## Features
 
 - Live view of any camera in the browser, arming the system or a single camera.
+- Camera audio in Live View and recordings (Settings → Video), starting muted
+  with page-scoped listen controls.
 - Live view recording on demand, one click while watching: saved to its own
   archive, browsable and filterable exactly like detection clips (discard,
   delete, camera and period filter).
@@ -101,6 +103,20 @@ delay or prevent recording; the event retains its error in History. Old events
 without a Blink clip cannot recreate footage of what already happened.
 Older history entries created from camera status timestamps are retained as
 unverified entries and do not trigger new alerts.
+
+To include camera audio in live listening and recordings, enable
+**Settings → Video → Include camera audio in Live View and recordings**.
+This is off by default and applies to new sessions. Audio-enabled sessions
+use compatible MSE mode, which can take longer to start. Use **Listen/Mute**
+in Live View or the saved video's volume controls. If the primary channel
+stays silent, try **Alternate** in Settings. A missing audio track still
+produces playable video.
+
+Playback starts muted. Unmuting a video shares that choice and volume with
+other videos on the same page, including players recreated while scrolling.
+Changing views, gallery pages or filters, or reloading the page, resets playback
+to muted. Playback mute does not change the audio saved in a recording.
+Previously saved silent recordings remain silent.
 
 ![The Clips tab](Screenshots/serve0.PNG)
 

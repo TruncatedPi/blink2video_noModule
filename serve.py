@@ -1581,60 +1581,102 @@ class LecteurTube:
 
 
 class DetecteurDebutFragment:
-    """Vrai si le bloc reçu commence pile sur un fragment fMP4 ("moof"),
-    jamais au milieu d'un moof/mdat déjà entamé.
+    """Repère le début d'un fragment fMP4 ("moof") dans un flux continu,
+    pour ne jamais démarrer un enregistrement au milieu d'un moof/mdat entamé.
 
     Les blocs que LecteurTube.lire() fait remonter (16 Ko) ne s'alignent
-    JAMAIS sur les frontières entre fragments moof+mdat de ffmpeg (vérifié
-    empiriquement : un mdat de plusieurs Ko peut être scindé en plein
-    milieu par un bloc). send_live_mse() s'en sert pour ne démarrer un
-    enregistrement que sur un bloc qui ouvre un vrai fragment - donc une
-    image-clé, garantie par -movflags frag_keyframe : démarrer sur un bloc
-    quelconque pouvait couper un mdat en deux, produisant un fragment sans
-    son moof, illisible à la relecture ("Invalid NAL unit size", bug réel).
-
-    Ne cherche qu'au tout DÉBUT de chaque bloc plutôt que d'y localiser un
-    offset précis : la seule conséquence d'un fragment manqué (en-tête de
-    boîte à cheval sur deux blocs, cas rare) est d'attendre le suivant,
-    quelques centaines de ms au pire - sans commune mesure avec un fichier
-    corrompu. Doit être alimentée avec CHAQUE bloc du flux, dans l'ordre, y
-    compris le segment d'initialisation ("first" dans send_live_mse : ftyp
-    et moov y sont des boîtes comme les autres pour ce suivi, il peut aussi
-    déjà contenir les premiers fragments), sous peine de désynchroniser son
-    suivi des tailles de boîte."""
+    presque jamais sur les frontières entre fragments moof+mdat de ffmpeg.
+    trouver_debut_fragment() localise l'offset exact du premier moof débutant
+    dans le bloc courant, ce qui permet à l'enregistrement de démarrer
+    instantanément et proprement dès la prochaine image-clé (-movflags
+    frag_keyframe), sans risque de tronquer un mdat antérieur."""
 
     def __init__(self):
         self._restant_boite = 0
+        self._genre_courant = b""
         self._entete = b""
+        self._entete_debute_dans_ce_bloc = False
+        self._offset_debut_entete = 0
+        self.dernier_offset_boite_complete: int | None = None
+        self.dernier_offset_fragment_complet: int | None = None
         self.fragment_vu = False
 
-    def bloc_ouvre_un_fragment(self, chunk: bytes) -> bool:
-        sur_frontiere_avant = self._restant_boite == 0 and not self._entete
-        resultat = (
-            sur_frontiere_avant and len(chunk) >= 8 and chunk[4:8] == b"moof"
-        )
-        position, n = 0, len(chunk)
+    def trouver_debut_fragment(self, chunk: bytes) -> int | None:
+        """Retourne l'offset dans `chunk` où débute un fragment 'moof',
+        ou None si aucun nouveau fragment ne commence dans ce bloc.
+        Met à jour le suivi des boîtes pour l'intégralité du bloc."""
+        position = 0
+        n = len(chunk)
+        premier_moof_offset = None
+        self.dernier_offset_boite_complete = None
+        self.dernier_offset_fragment_complet = None
+
         while position < n:
-            if self._restant_boite:
+            if self._restant_boite > 0:
                 pris = min(self._restant_boite, n - position)
                 position += pris
                 self._restant_boite -= pris
+                if self._restant_boite == 0:
+                    self.dernier_offset_boite_complete = position
+                    if self._genre_courant == b"mdat":
+                        self.dernier_offset_fragment_complet = position
                 continue
+
+            # Début d'une boîte
+            if not self._entete:
+                self._offset_debut_entete = position
+                self._entete_debute_dans_ce_bloc = True
+
             manque = 8 - len(self._entete)
             pris = min(manque, n - position)
             self._entete += chunk[position:position + pris]
             position += pris
+
             if len(self._entete) < 8:
+                # L'en-tête de 8 octets est à cheval sur la fin de ce bloc
+                self._entete_debute_dans_ce_bloc = False
                 break
+
             taille = int.from_bytes(self._entete[:4], "big")
-            if self._entete[4:8] == b"moof":
+            genre = self._entete[4:8]
+            if genre == b"moof":
                 self.fragment_vu = True
+            est_debut_complet = self._entete_debute_dans_ce_bloc
+            offset_boite = self._offset_debut_entete
             self._entete = b""
+            self._entete_debute_dans_ce_bloc = False
+            self._genre_courant = genre
+
+            if genre == b"moof" and premier_moof_offset is None and est_debut_complet:
+                premier_moof_offset = offset_boite
+
             if taille < 8:
                 self._restant_boite = 0  # boîte dégénérée : abandonne le suivi
                 break
             self._restant_boite = taille - 8
-        return resultat
+            if self._restant_boite == 0:
+                self.dernier_offset_boite_complete = position
+                if genre == b"mdat":
+                    self.dernier_offset_fragment_complet = position
+
+        return premier_moof_offset
+
+    def bloc_ouvre_un_fragment(self, chunk: bytes) -> bool:
+        """Vrai si un nouveau fragment 'moof' débute dans ce bloc."""
+        return self.trouver_debut_fragment(chunk) is not None
+
+
+def _extraire_init_segment(segment: bytes) -> bytes:
+    """Isole ftyp + moov d'un bloc initial, sans fragments postérieurs tronqués."""
+    pos = 0
+    n = len(segment)
+    while pos + 8 <= n:
+        taille = int.from_bytes(segment[pos:pos + 4], "big")
+        genre = segment[pos + 4:pos + 8]
+        if taille < 8 or genre not in (b"ftyp", b"moov"):
+            break
+        pos += taille
+    return segment[:pos] if pos > 0 else segment
 
 
 _MOOV_CONTAINERS = {b"moov", b"trak", b"mdia", b"minf", b"stbl"}
@@ -2622,7 +2664,7 @@ class Handler(serveweb.Handler):
                     break
                 try:
                     self.wfile.write(chunk)
-                except (BrokenPipeError, ConnectionResetError):
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                     return  # l'utilisateur a changé de clip, c'est normal
                 remaining -= len(chunk)
 
@@ -3320,7 +3362,10 @@ class Handler(serveweb.Handler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
 
     def live_failure_reason(self, stream) -> str:
         """Demande à Blink pourquoi aucune image n'arrive.
@@ -3822,10 +3867,11 @@ class Handler(serveweb.Handler):
                 # prix pour que son suivi des tailles de boîte reste
                 # synchronisé sur tout le flux (voir sa docstring). Pas pour
                 # `first`, déjà pré-alimenté avant la boucle.
-                fragment_complet = (
-                    data is first or detecteur_fragments.bloc_ouvre_un_fragment(data)
+                debut_fragment = (
+                    None if data is first
+                    else detecteur_fragments.trouver_debut_fragment(data)
                 )
-                if desire and fichier_direct is None and fragment_complet:
+                if desire and fichier_direct is None and debut_fragment is not None:
                     # Un démarrage demandé en cours de direct (pas dès le
                     # premier bloc) attend ce fragment plutôt que d'écrire
                     # `data` tel quel : les blocs lus depuis ffmpeg (16 Ko,
@@ -3844,9 +3890,15 @@ class Handler(serveweb.Handler):
                     try:
                         chemin.parent.mkdir(parents=True, exist_ok=True)
                         fichier_direct = chemin.open("wb")
-                        fichier_direct.write(first)
-                        if data is not first:
-                            fichier_direct.write(data)
+                        init_seg = _extraire_init_segment(first)
+                        fichier_direct.write(init_seg)
+                        holder["pos_valide"] = fichier_direct.tell()
+                        fichier_direct.write(data[debut_fragment:])
+                        if (detecteur_fragments.dernier_offset_fragment_complet is not None
+                                and detecteur_fragments.dernier_offset_fragment_complet >= debut_fragment):
+                            holder["pos_valide"] = len(init_seg) + (
+                                detecteur_fragments.dernier_offset_fragment_complet - debut_fragment
+                            )
                         holder["fichier_direct"] = fichier_direct
                         self.enregistrement_cree = chemin
                     except OSError as error:
@@ -3864,16 +3916,25 @@ class Handler(serveweb.Handler):
                         )
                 elif not desire and fichier_direct is not None:
                     try:
-                        _fermer_enregistrement_direct(fichier_direct)
+                        pos = holder.get("pos_valide")
+                        if pos is not None:
+                            fichier_direct.seek(pos)
+                            fichier_direct.truncate()
+                        fichier_direct.close()
                     except OSError as error:
                         _journal_direct(
                             name, f"echec de fermeture de l'enregistrement, "
                                   f"{type(error).__name__}: {error}"
                         )
                     holder["fichier_direct"] = None
+                    holder.pop("pos_valide", None)
                 elif fichier_direct is not None:
                     try:
                         fichier_direct.write(data)
+                        if detecteur_fragments.dernier_offset_fragment_complet is not None:
+                            holder["pos_valide"] = fichier_direct.tell() - (
+                                len(data) - detecteur_fragments.dernier_offset_fragment_complet
+                            )
                     except OSError as error:
                         ENREGISTREMENT_DIRECT_ACTIF.clear()
                         self.enregistrement_erreur = str(error)
@@ -3979,12 +4040,18 @@ class Handler(serveweb.Handler):
             fichier_direct = holder.get("fichier_direct")
             if fichier_direct is not None:
                 try:
-                    _fermer_enregistrement_direct(fichier_direct)
+                    pos = holder.get("pos_valide")
+                    if pos is not None:
+                        fichier_direct.seek(pos)
+                        fichier_direct.truncate()
+                    fichier_direct.close()
                 except OSError as error:
                     journaux_nettoyage.append(
                         f"echec de fermeture de l'enregistrement, "
                         f"{type(error).__name__}: {error}"
                     )
+                holder["fichier_direct"] = None
+                holder.pop("pos_valide", None)
             stream = holder.get("stream")
             if stream is not None:
                 try:
@@ -5222,24 +5289,19 @@ class Handler(serveweb.Handler):
             actif_voulu = bool(payload.get("actif"))
             with DIRECT_WEBRTC_SESSION_LOCK:
                 holder = DIRECT_WEBRTC_SESSION.get("session")
-                if holder is not None:
-                    autorise = (
-                        (not session_id or holder["session_id"] == session_id)
-                        and not holder["arret"].is_set()
-                        and not holder["rendu"]
-                    )
-                    if session_id and holder["session_id"] != session_id:
-                        autorise = False
-                elif DIRECT_MSE_SESSION.get("session") is not None:
-                    holder = DIRECT_MSE_SESSION["session"]
-                    autorise = ((not session_id or holder["session_id"] == session_id)
-                                and not holder["arret"].is_set()
-                                and not holder.get("automatic_recording"))
-                elif MODULE_SLOT_INFO.get("quoi") == "direct MSE" and not session_id:
-                    autorise = True  # Ancien lecteur MSE sans identifiant.
-                else:
-                    autorise = False
-
+                mse_holder = DIRECT_MSE_SESSION.get("session")
+                autorise = (
+                    holder is not None and holder["session_id"] == session_id
+                    and not holder["arret"].is_set() and not holder["rendu"]
+                ) or (
+                    mse_holder is not None
+                    and (not session_id or mse_holder["session_id"] == session_id)
+                    and not mse_holder["arret"].is_set()
+                    and not mse_holder.get("automatic_recording")
+                ) or (
+                    holder is None and mse_holder is None and not session_id
+                    and MODULE_SLOT_INFO.get("quoi") == "direct MSE"
+                )
                 if autorise:
                     if actif_voulu:
                         ENREGISTREMENT_DIRECT_ACTIF.set()
@@ -5609,6 +5671,21 @@ __CSS__
            title="Arrête le direct tout seul après ce délai, jusqu'à 420 s, même en direct continu. Vide ou 0 : pas d'arrêt automatique ; Blink ferme de lui-même chaque direct au bout d'environ 6 minutes, et la case « Direct continu » d'une caméra le relance.">
         <label for="liveAutoStopSeconds" data-i18n="reglages.liveAutoStop">Arrêt auto du direct (s)</label>
         <input type="number" id="liveAutoStopSeconds" min="0" max="420" placeholder="0">
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend data-i18n="reglages.cameraAudio.title">Audio de la caméra</legend>
+      <label>
+        <input type="checkbox" id="cameraAudioEnabled">
+        <span data-i18n="reglages.cameraAudio">Inclure le son de la caméra dans le direct et les enregistrements</span>
+      </label>
+      <p class="sub tiny" data-i18n="reglages.cameraAudio.hint">Avec le son, les directs utilisent le mode compatible MSE et peuvent démarrer plus lentement. La lecture commence en sourdine ; écouter le son ne change pas l'enregistrement.</p>
+      <div class="champCadence">
+        <label for="cameraAudioTrack" data-i18n="reglages.cameraAudio.track">Canal audio</label>
+        <select id="cameraAudioTrack">
+          <option value="0" data-i18n="reglages.cameraAudio.primary">Principal</option>
+          <option value="1" data-i18n="reglages.cameraAudio.alternate">Alternatif (si le principal reste silencieux)</option>
+        </select>
       </div>
     </fieldset>
     <fieldset>

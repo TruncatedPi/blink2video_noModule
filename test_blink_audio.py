@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import io
 import math
+import os
+import shutil
 import struct
 import subprocess
 import tempfile
@@ -19,7 +21,7 @@ class AudioRemuxTests(unittest.TestCase):
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory(prefix="blink-audio-test-")
         cls.root = Path(cls.temp.name)
-        cls.ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        cls.ffmpeg = shutil.which("ffmpeg") or imageio_ffmpeg.get_ffmpeg_exe()
         cls.source = cls.root / "source.ts"
         cls.run_ffmpeg([
             "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=10:duration=4",
@@ -38,10 +40,13 @@ class AudioRemuxTests(unittest.TestCase):
 
     @classmethod
     def run_ffmpeg(cls, args):
+        env = dict(os.environ, GCONV_PATH=os.environ.get("GCONV_PATH", "/dev/null"))
         result = subprocess.run([cls.ffmpeg, "-hide_banner", "-loglevel", "error", *args],
-                                capture_output=True, timeout=20)
+                                capture_output=True, timeout=20, env=env)
         if result.returncode:
-            raise AssertionError(result.stderr.decode("utf-8", "replace")[-2000:])
+            detail = result.stderr.decode("utf-8", "replace")[-2000:].strip()
+            raise AssertionError(f"FFmpeg exit code {result.returncode}: {detail}" if detail
+                                 else f"FFmpeg failed with exit code {result.returncode}")
 
     def remux(self, enabled, track=0, source=None):
         target = self.root / f"output-{enabled}-{track}-{source is not None}.mp4"

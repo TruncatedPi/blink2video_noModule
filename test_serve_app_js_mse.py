@@ -56,8 +56,8 @@ class TestsLecteurMse(unittest.TestCase):
                 raise AssertionError(f"constante MSE introuvable : {original}")
             bloc = bloc.replace(original, court)
         cls.bloc_mse = bloc
-
         cls.bloc_mse = audio_source(source) + "\n" + cls.bloc_mse
+
 
     def _executer(self, scenario: str) -> dict:
         script = r"""
@@ -72,6 +72,7 @@ const scenario = process.argv[2];
 let horloge = 0, numeroTimer = 0, horlogeArretee = false;
 const timers = new Map();
 Object.defineProperty(globalThis, 'performance', {value:{now:()=>horloge}, configurable:true});
+globalThis.crypto = globalThis.crypto || require('node:crypto').webcrypto || require('node:crypto');
 globalThis.setTimeout = (fn, ms=0, ...args) => {
   const id = ++numeroTimer;
   timers.set(id, {fn:()=>fn(...args), at:horloge+Math.max(0,ms), interval:0});

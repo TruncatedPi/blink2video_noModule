@@ -237,6 +237,7 @@ class DoorbellRecordingTests(unittest.TestCase):
 
         ffmpeg = serve.md.find_ffmpeg()
         source = self.root / "input.ts"
+        env = dict(os.environ, GCONV_PATH=os.environ.get("GCONV_PATH", "/dev/null"))
         subprocess.run([
             ffmpeg, "-hide_banner", "-loglevel", "error",
             "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=10:duration=5",
@@ -244,7 +245,7 @@ class DoorbellRecordingTests(unittest.TestCase):
             "-c:v", "libx264", "-g", "5", "-preset", "ultrafast",
             "-c:a", "aac", "-ac", "1", "-b:a", "32k",
             "-f", "mpegts", str(source)], check=True, capture_output=True, timeout=20,
-            creationflags=serve.runtime.SANS_FENETRE)
+            env=env, creationflags=serve.runtime.SANS_FENETRE)
 
         def source_av(command, **options):
             self.assertIn("0:a:0?", command)
@@ -253,6 +254,8 @@ class DoorbellRecordingTests(unittest.TestCase):
             # camera's TCP endpoint with a synthetic A/V transport stream.
             command = list(command)
             command[command.index("-i") + 1] = str(source)
+            env_cmd = dict(options.get("env") or os.environ, GCONV_PATH=os.environ.get("GCONV_PATH", "/dev/null"))
+            options["env"] = env_cmd
             return subprocess.Popen(command, **options, creationflags=serve.runtime.SANS_FENETRE)
 
         with (

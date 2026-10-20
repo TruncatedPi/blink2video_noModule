@@ -18,7 +18,6 @@ window.fetch = (entree, options) => {
 // d'un autre onglet. pagehide couvre aussi les rechargements et le bfcache.
 window.addEventListener("pagehide", () => {
   for (const name of nomsDirectsActifs()) stopWatch(name, true);
-  reinitialiserAudioPage();
 });
 
 // Toute valeur reçue de Blink ou lue dans un nom de fichier est une donnée,
@@ -58,7 +57,6 @@ let data = { clips: [], cameras: [], days: [] };
 let videos = { daily: [], weekly: [], monthly: [] };
 let snapshots = [];
 const $ = (id) => document.getElementById(id);
-
 
 // Un seul fuseau et les mêmes formats dans chaque vue. Les dates ISO et noms
 // UTC sur disque restent des identifiants ; seul leur affichage est réglable.
@@ -118,59 +116,32 @@ function dateHeureLocale(valeur) {
   return m ? `${dateLocale(m[1])} ${heureLocale(m[2])}` : "";
 }
 
-// Préférence de lecture limitée à cette page : aucun stockage persistant.
-let lectureMuette = true;
-let volumeLecture = 1;
-const etatsAudioVideo = new WeakMap();
+// ── audio direct (Live View) ───────────────────────────────────────────────
 const videosAudioInitialises = new WeakSet();
-
-function appliquerAudioVideo(video, muet = lectureMuette) {
-  etatsAudioVideo.set(video, { muet, volume: volumeLecture });
-  video.muted = muet;
-  video.volume = volumeLecture;
-  actualiserBoutonAudio(video);
-}
-
 function actualiserBoutonAudio(video) {
   const bouton = video.closest?.(".live")?.querySelector('[data-action="toggle-audio"]');
   if (!bouton) return;
   const disponible = video.blinkAudioDisponible;
+  const ecouteActive = disponible === true && !video.muted && video.volume > 0;
   const cle = disponible === true
-    ? (video.muted || video.volume === 0 ? "live.audio.listen" : "live.audio.mute")
+    ? (ecouteActive ? "live.audio.mute" : "live.audio.listen")
     : (disponible === false ? "live.audio.unavailable" : "live.audio.waiting");
   bouton.disabled = disponible !== true;
+  bouton.classList?.toggle?.("active", ecouteActive);
   bouton.textContent = t(cle);
   bouton.title = t(cle);
   bouton.setAttribute("aria-label", t(cle));
 }
 
-function memoriserAudioVideo(video) {
-  if (video.isConnected === false) return;
-  const attendu = etatsAudioVideo.get(video);
-  if (attendu && attendu.muet === video.muted && attendu.volume === video.volume) return;
-  lectureMuette = video.muted;
-  volumeLecture = video.volume;
-  // Mettre à jour aussi les lecteurs déjà créés : les suivants et les
-  // lecteurs recyclés héritent du même choix tant qu'on reste sur la page.
-  for (const autre of document.querySelectorAll("#list video")) appliquerAudioVideo(autre);
-}
-
 function preparerAudioVideo(video) {
   if (!videosAudioInitialises.has(video)) {
     videosAudioInitialises.add(video);
-    video.addEventListener("volumechange", () => memoriserAudioVideo(video));
+    video.addEventListener("volumechange", () => actualiserBoutonAudio(video));
   }
   video.defaultMuted = true;
-  appliquerAudioVideo(video);
-}
-
-function preparerAudioListe() {
-  for (const video of $("list").querySelectorAll("video")) preparerAudioVideo(video);
-}
-
-function reinitialiserAudioPage() {
-  lectureMuette = true;
-  for (const video of document.querySelectorAll("#list video")) appliquerAudioVideo(video);
+  video.muted = true;
+  video.volume = 1;
+  actualiserBoutonAudio(video);
 }
 
 async function lireVideo(video) {
@@ -178,9 +149,9 @@ async function lireVideo(video) {
     await video.play();
   } catch (error) {
     if (error.name !== "NotAllowedError" || video.muted) throw error;
-    // Une politique d'autoplay ne doit pas être traitée comme une panne
-    // Blink. Garder la préférence de la page mais démarrer ce lecteur muet.
-    appliquerAudioVideo(video, true);
+    // Une politique d'autoplay ne doit pas être traitée comme une panne Blink.
+    video.muted = true;
+    actualiserBoutonAudio(video);
     await video.play();
   }
 }
@@ -196,10 +167,10 @@ function toggleAudio(name) {
   const ecouter = video.muted || video.volume === 0;
   video.muted = !ecouter;
   if (ecouter && video.volume === 0) video.volume = 1;
-  memoriserAudioVideo(video);
+  actualiserBoutonAudio(video);
 }
 
-// ── fin audio de lecture ──────────────────────────────────────────────────
+// ── fin audio direct (Live View) ──────────────────────────────────────────
 
 // ── i18n ─────────────────────────────────────────────────────────────────
 // Même pattern que gui/app.js de lidar2map : dico inline par locale + attribut
@@ -260,12 +231,13 @@ const I18N = {
     "reglages.fontSize": "Taille de police", "reglages.fontColor": "Couleur",
     "reglages.boxOpacity": "Opacité du bandeau",
     "reglages.timezone": "Fuseau horaire",
+    "reglages.cameraAudio.title": "Audio de la caméra",
     "reglages.cameraAudio": "Inclure le son de la caméra dans le direct et les enregistrements",
     "reglages.cameraAudio.hint": "Avec le son, les directs utilisent le mode compatible MSE et peuvent démarrer plus lentement. La lecture commence en sourdine ; écouter le son ne change pas l'enregistrement.",
     "reglages.cameraAudio.track": "Canal audio",
     "reglages.cameraAudio.primary": "Principal",
     "reglages.cameraAudio.alternate": "Alternatif (si le principal reste silencieux)",
-    "live.audio.listen": "🔊 Écouter", "live.audio.mute": "🔇 Couper le son",
+    "live.audio.listen": "🔇 Écouter", "live.audio.mute": "🔊 Couper le son",
     "live.audio.unavailable": "🔇 Audio indisponible", "live.audio.waiting": "🔇 Attente du son",
     "reglages.dateTime": "Date et heure",
     "reglages.dateFormat": "Format de date",
@@ -516,12 +488,13 @@ const I18N = {
     "reglages.fontSize": "Font size", "reglages.fontColor": "Color",
     "reglages.boxOpacity": "Box opacity",
     "reglages.timezone": "Time zone",
+    "reglages.cameraAudio.title": "Camera audio",
     "reglages.cameraAudio": "Include camera audio in Live View and recordings",
     "reglages.cameraAudio.hint": "With audio enabled, live sessions use compatible MSE mode and may take longer to start. Playback starts muted; listening does not change recorded audio.",
     "reglages.cameraAudio.track": "Audio channel",
     "reglages.cameraAudio.primary": "Primary",
     "reglages.cameraAudio.alternate": "Alternate (if the primary stays silent)",
-    "live.audio.listen": "🔊 Listen", "live.audio.mute": "🔇 Mute",
+    "live.audio.listen": "🔇 Listen", "live.audio.mute": "🔊 Mute",
     "live.audio.unavailable": "🔇 Audio unavailable", "live.audio.waiting": "🔇 Waiting for audio",
     "reglages.dateTime": "Date and time",
     "reglages.dateFormat": "Date format",
@@ -775,7 +748,7 @@ function setLang(code, persist) {
   // écran déjà posé survit donc au changement de langue sans se refaire,
   // et doit être retraduit ici plutôt que de rester dans l'ancienne langue.
   if (typeof syncExpandButtons === "function") syncExpandButtons();
-  for (const video of document.querySelectorAll("#list video")) actualiserBoutonAudio(video);
+  for (const video of document.querySelectorAll(".live video")) actualiserBoutonAudio(video);
   // #sourdineListe porte data-i18n="sourdine.loading" en repli HTML :
   // applyI18n() vient d'écraser ses cases à cocher réelles par ce texte de
   // chargement si le panneau est ouvert pendant la bascule de langue.
@@ -2747,8 +2720,8 @@ function appliquerEtatEnregistrement(bouton, actif) {
 // l'état supposé du bouton avant le clic - deux onglets sur le même direct
 // restent ainsi cohérents l'un avec l'autre.
 async function toggleRecord(name, bouton) {
-  const sessionId = WEBRTC_SESSION[name] || MSE_SESSION[name];
-  if (!sessionId) return;
+  const sessionId = WEBRTC_SESSION[name] || MSE_SESSION[name] || "";
+  if (!sessionId && !MSE_ABORT[name]) return;
   const actif = !bouton.classList.contains("active");
   bouton.disabled = true;
   try {
@@ -2757,7 +2730,8 @@ async function toggleRecord(name, bouton) {
       body: JSON.stringify({ actif, session_id: sessionId }),
     });
     const info = await lireJSON(reponse);
-    if (!reponse.ok || info.error || (WEBRTC_SESSION[name] || MSE_SESSION[name]) !== sessionId) return;
+    const sessionActive = WEBRTC_SESSION[name] || MSE_SESSION[name] || "";
+    if (!reponse.ok || info.error || (sessionId && sessionActive !== sessionId)) return;
     appliquerEtatEnregistrement(bouton, Boolean(info.actif));
   } catch (erreur) {
     // Rien de plus utile a afficher qu'un bouton resté sur son état
@@ -2986,7 +2960,6 @@ function navigationClips(total, pages) {
 
 function changerPageClips(page, direction, taille = clipsParPage) {
   if (page === pageClips && taille === clipsParPage) return;
-  reinitialiserAudioPage();
   pageClips = page;
   if (taille !== clipsParPage) {
     try { localStorage.setItem(CLE_TAILLE_PAGE_CLIPS, String(taille)); } catch (erreur) {}
@@ -3174,7 +3147,6 @@ function preparerLecteursClips() {
         || etat.zone.contains(document.activeElement)
         || document.pictureInPictureElement === video
         || etat.zone.contains(document.fullscreenElement)))) return;
-    memoriserAudioVideo(video);
     etat.lecture = {
       temps: video.readyState ? video.currentTime : (etat.lecture?.temps || 0),
       volume: video.volume, muet: video.muted, vitesse: video.playbackRate, boucle: video.loop,
@@ -3203,7 +3175,8 @@ function preparerLecteursClips() {
     video.src = etat.zone.dataset.src;
     video.setAttribute("aria-label", etat.zone.getAttribute("aria-label"));
     const lecture = etat.lecture;
-    preparerAudioVideo(video);
+    video.volume = lecture?.volume ?? 1;
+    video.muted = lecture?.muet ?? false;
     video.playbackRate = lecture?.vitesse ?? 1;
     video.loop = lecture?.boucle ?? false;
     if (lecture) {
@@ -3428,7 +3401,6 @@ function ouvrirFiltre() {
 }
 
 async function appliquerFiltre() {
-  reinitialiserAudioPage();
   pageClips = 0;
   if (plageEnAttente) plageClips = plageEnAttente;
   sauvegarderFiltre();
@@ -3738,7 +3710,6 @@ majCaseMasquees();
 // `system` (loadSystem), jamais `data`/`videos`.
 $("view").onchange = () => {
   globalThis._vueChoisieManuellement = true;
-  reinitialiserAudioPage();
   pageClips = 0;
   if ($("view").value === "live") {
     rafraichirVignettes = true;
@@ -4543,7 +4514,6 @@ async function trouverCleCamera(cible) {
 
 async function ouvrirDirectCamera(cible, enregistrer = false) {
   if ($("view").value !== "live") {
-    reinitialiserAudioPage();
     $("view").value = "live";
     pageClips = 0;
     rafraichirVignettes = true;
@@ -4780,7 +4750,6 @@ async function renderEvents() {
 }
 
 async function afficherEnregistrementsSonnette(evt = null) {
-  reinitialiserAudioPage();
   for (const name of nomsDirectsActifs()) stopWatch(name);
   $("view").value = "direct";
   pageClips = 0;
