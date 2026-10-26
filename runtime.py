@@ -64,7 +64,7 @@ ENTREE = "blink2video"
 
 
 def detect_system_timezone() -> str:
-    """Détecte le fuseau horaire IANA du système local."""
+    """Détecte le fuseau horaire IANA du système local. / Detects the local system's IANA timezone."""
     env_tz = os.environ.get("TZ")
     if env_tz:
         try:
@@ -146,7 +146,7 @@ EVENEMENTS_SONNETTE = ".blink_doorbell_events.json"
 
 
 def fichier_evenements_sonnette(dossier: Path | None = None) -> Path:
-    """Emplacement du registre d'événements de sonnette sous app_dir()."""
+    """Emplacement du registre d'événements de sonnette sous app_dir(). / Location of doorbell events registry under app_dir()."""
     return (app_dir() if dossier is None else dossier) / EVENEMENTS_SONNETTE
 
 

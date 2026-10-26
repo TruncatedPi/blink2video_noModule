@@ -1,9 +1,14 @@
 """Événements explicites Blink, jamais déduits d'un relevé de caméra.
+(Explicit Blink events, never inferred from camera status polls.)
 
 ``homescreen.updated_at`` date aussi les heartbeats et changements de
 configuration. ``enabled`` commande la détection : aucun des deux n'est une
 preuve de mouvement ou d'appui. Les événements réseau et les médias portent,
 eux, un type/source et une date de création. Toute source inconnue est ignorée.
+(homescreen.updated_at also timestamps heartbeats and config changes.
+enabled toggles motion detection: neither proves button press or motion.
+Network events and media carry an explicit type/source and creation timestamp.
+Any unknown source is ignored.)
 """
 
 from __future__ import annotations
@@ -42,6 +47,8 @@ def event_type(entry: dict) -> str | None:
     declared_type = str(entry.get("type") or "").strip().lower()
     # « doorbell » peut seulement décrire le matériel. Une source explicite
     # du même nom désigne un appui ; le type du matériel seul ne le prouve pas.
+    # ("doorbell" can describe the hardware type. An explicit source of the
+    # same name indicates a button press; the device type alone does not prove it.)
     if declared_type != "doorbell":
         sources.add(declared_type)
     if sources & LIVE_SOURCES:
@@ -79,6 +86,8 @@ def normalize_event(entry, doorbells: list[dict], network_id: str = "",
     timestamp = instant.isoformat()
     # Le même événement peut paraître dans le réseau puis comme média cloud.
     # Une identité commune empêche de filmer/carillonner deux fois.
+    # (The same event can appear in sync network events and then as cloud media.
+    # A shared deterministic identity prevents double recording or double chiming.)
     identity = hashlib.sha256(json.dumps(
         [nid, cid, kind, timestamp], separators=(",", ":")
     ).encode("utf-8")).hexdigest()
@@ -89,11 +98,16 @@ def normalize_event(entry, doorbells: list[dict], network_id: str = "",
 
 async def request_event_media(blink, time: float, page: int) -> dict:
     """La v2 inclut les alertes sans vidéo (type=event), même sans abonnement.
+    (API v2 includes alerts without clips, type=event, even without subscription.)
 
     La v1 de blinkpy n'inventorie que les médias enregistrés. Garder ce repli
     pour les anciens comptes, mais ne pas l'utiliser si la v2 répond vide.
     Windows peut appliquer son fuseau local au strftime(gmtime, "%z") de
     blinkpy : dater explicitement en UTC évite une fenêtre située dans le futur.
+    (blinkpy v1 only inventories recorded media clips. Keep this fallback for
+    older accounts, but don't fall back if v2 answers empty.
+    Windows can apply local timezone in blinkpy's strftime(gmtime, "%z"):
+    formatting explicitly in UTC prevents query windows in the future.)
     """
     since = dt.datetime.fromtimestamp(time, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     query = urlencode({"since": since, "page": page})
@@ -103,7 +117,7 @@ async def request_event_media(blink, time: float, page: int) -> dict:
         response = await api.http_get(blink, url)
         if isinstance(response, dict) and isinstance(response.get("media"), list):
             return response
-    raise RuntimeError("Inventaire des événements média indisponible")
+    raise RuntimeError("Inventaire des événements média indisponible")  # Media event inventory unavailable
 
 
 async def poll(blink) -> list[dict]:
@@ -121,7 +135,7 @@ async def poll(blink) -> list[dict]:
             response = await api.request_sync_events(blink, network)
             entries = response.get("event") if isinstance(response, dict) else None
             if not isinstance(entries, list):
-                raise RuntimeError("Inventaire des événements réseau indisponible")
+                raise RuntimeError("Inventaire des événements réseau indisponible")  # Network event inventory unavailable
             successes += 1
             for entry in entries:
                 event = normalize_event(entry, doorbells, network, now)
@@ -132,13 +146,16 @@ async def poll(blink) -> list[dict]:
     # Certains comptes ne publient plus le vieux flux /events/network. Les
     # événements/médias v2 sont un repli explicite : les alertes sans vidéo
     # existent aussi, sans transformer une vidéo live en alerte.
+    # (Some accounts no longer publish the legacy /events/network stream.
+    # Media v2 events are an explicit fallback: non-video alerts exist there
+    # without mistaking manual live views for sensor alerts.)
     try:
         for page in range(1, 5):
             response = await request_event_media(
                 blink, time=now - EVENT_MAX_AGE_SECONDS, page=page)
             entries = response.get("media") if isinstance(response, dict) else None
             if not isinstance(entries, list):
-                raise RuntimeError("Inventaire des événements média indisponible")
+                raise RuntimeError("Inventaire des événements média indisponible")  # Media event inventory unavailable
             successes += 1
             for entry in entries:
                 event = normalize_event(entry, doorbells, now=now)
@@ -149,5 +166,5 @@ async def poll(blink) -> list[dict]:
     except Exception as error:
         errors.append(error)
     if not successes:
-        raise RuntimeError("Blink n'a fourni aucun inventaire d'événements valide") from errors[-1]
+        raise RuntimeError("Blink n'a fourni aucun inventaire d'événements valide") from errors[-1]  # Blink provided no valid event inventory
     return sorted(result.values(), key=lambda event: event["timestamp"])

@@ -304,10 +304,13 @@ def _charger_evenements_sonnette() -> list[dict]:
                     ):
                         # Le repli homescreen de 8d38138 marquait à tort ces
                         # relevés comme vérifiés. Conserver aussi leurs vidéos.
+                        # (Legacy homescreen fallback incorrectly marked these polls as verified.
+                        # Preserve their recorded video files while demoting the verified status.)
                         event["verified"] = False
                     if not event.get("verified"):
                         # Garder l'historique, mais ne plus présenter les anciens
                         # heartbeats comme des détections confirmées.
+                        # (Keep history, but no longer present old heartbeats as confirmed detections.)
                         event.update(type="unknown", acknowledged=True)
                 return events[-100:]
     except Exception:
@@ -352,9 +355,12 @@ DOORBELL_MAX_EVENTS = 100
 
 async def _poll_doorbells_async(blink_instance) -> list[dict]:
     """Associe chaque événement explicite à sa caméra stable.
+    (Associates each explicit doorbell event with its stable camera identifier.)
 
     Les erreurs de lecture remontent au moniteur. Les relevés homescreen ne
     prouvent aucun appui/mouvement, même après un changement de timestamp.
+    (Read errors propagate to monitor. Homescreen polling does not prove button
+    press or motion, even when timestamps change.)
     """
     events = await blink_events.poll(blink_instance)
 
@@ -431,6 +437,7 @@ def _doorbell_record_loop() -> None:
         try:
             # Une configuration désactivée pendant l'attente ne doit pas
             # lancer une nouvelle caméra en arrière-plan.
+            # (If doorbell recording was disabled while in queue, do not launch a background recording.)
             settings = runtime.lire_reglages()
             if not (settings["doorbell_alerts_enabled"] and settings["doorbell_auto_record"]):
                 _mettre_a_jour_enregistrement_evenement(event["id"], recording_status="cancelled")
@@ -440,6 +447,9 @@ def _doorbell_record_loop() -> None:
             # Laisser à la sonnette ~2,5s depuis l'événement pour terminer son
             # paquet d'alerte vers Blink avant d'initier le direct, évitant
             # un rejet « Live view failed » si le serveur réagit en moins d'une seconde.
+            # (Camera stabilization delay: give the doorbell ~2.5s from the event to finish
+            # sending its alert packet to Blink before initiating Live View, avoiding
+            # a "Live view failed" command rejection if the server reacts in under 1s.)
             try:
                 event_epoch = dt.datetime.fromisoformat(event["timestamp"]).timestamp()
             except Exception:
@@ -465,8 +475,10 @@ def _doorbell_record_loop() -> None:
                     _journal_direct(
                         event.get("camera", "sonnette"),
                         f"nouvelle tentative d'enregistrement ({tentative}/{max_tentatives}) après échec"
+                        # (retry recording attempt after failure)
                     )
                     # Pause pour laisser Blink libérer le verrou de commande
+                    # (Pause to let Blink release command lock)
                     if DOORBELL_MONITOR_STOP.wait(2.5):
                         _mettre_a_jour_enregistrement_evenement(event["id"], recording_status="cancelled")
                         break
@@ -492,9 +504,10 @@ def _doorbell_record_loop() -> None:
                     break
                 elif est_valide:
                     # Des fragments valides ont été sauvés avant l'interruption : conserver le fichier
-                    raise RuntimeError(error or "Vidéo incomplète")
+                    # (Valid fMP4 fragments were saved before interruption: keep the video file)
+                    raise RuntimeError(error or "Vidéo incomplète")  # "Incomplete video"
                 else:
-                    dernier_erreur = error or getattr(handler, "enregistrement_erreur", "") or "Aucune vidéo reçue"
+                    dernier_erreur = error or getattr(handler, "enregistrement_erreur", "") or "Aucune vidéo reçue"  # "No video received"
                     if tentative == max_tentatives:
                         raise RuntimeError(dernier_erreur)
         except Exception as error:
@@ -507,7 +520,9 @@ def _doorbell_record_loop() -> None:
 
 
 def _doorbell_monitor_loop() -> None:
-    """Publie chaque événement explicite une fois, indépendamment du direct."""
+    """Publie chaque événement explicite une fois, indépendamment du direct.
+    (Polls and publishes explicit doorbell events in the background, independently of Live View.)
+    """
     global DOORBELL_MONITOR_ERROR
     while not DOORBELL_MONITOR_STOP.is_set():
         reglages = runtime.lire_reglages()
@@ -5944,7 +5959,9 @@ class _PuitsDirect:
 
 
 class _EnregistreurSonnette(Handler):
-    """Même pipeline MSE et même nettoyage Blink, sans connexion navigateur."""
+    """Même pipeline MSE et même nettoyage Blink, sans connexion navigateur.
+    (Headless doorbell recorder: same MSE pipeline & Blink cleanup, without browser connection.)
+    """
 
     def __init__(self, event: dict):
         self.event_id = event["id"]

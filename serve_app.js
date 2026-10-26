@@ -4537,6 +4537,8 @@ async function ouvrirDirectCamera(cible, enregistrer = false) {
 async function lancerEnregistrementDepuisAlerte(evt) {
   // L'intention voyage avec la nouvelle session. Aucun drapeau global armé
   // avant le réveil, aucun minuteur susceptible d'abattre un autre direct.
+  // (Recording intent travels with the new session ID. No global flag armed
+  // before camera wake-up, and no timer that could kill another concurrent session.)
   return ouvrirDirectCamera(evt, true);
 }
 
