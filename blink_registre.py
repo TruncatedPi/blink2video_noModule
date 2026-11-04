@@ -68,9 +68,9 @@ def load_download_state(output: Path) -> dict:
             if state is _ABSENT:
                 return {"version": 1, "clips": {}}
         if not isinstance(state, dict):
-            raise ValueError("la racine JSON doit être un objet")
+            raise ValueError(msg("registre_racine_objet"))
         if state.get("version") not in (1, 2) or not isinstance(state.get("clips"), dict):
-            raise ValueError("format inconnu")
+            raise ValueError(msg("registre_format_inconnu"))
         valides = {}
         ignores = 0
         for cle, entree in state["clips"].items():
@@ -118,13 +118,10 @@ def load_download_state(output: Path) -> dict:
         state["version"] = 2
         return state
     except json.JSONDecodeError:
-        categorie = "données JSON"
+        categorie = msg("registre_categorie_donnees")
     except ValueError:
-        categorie = "schéma JSON"
-    print(
-        f"  ! État incrémental illisible [{categorie}] ; "
-        "les fichiers existants seront vérifiés."
-    )
+        categorie = msg("registre_categorie_schema")
+    print(msg("registre_illisible", categorie=categorie))
     return {"version": 1, "clips": {}}
 
 
@@ -158,9 +155,7 @@ def _sauvegarder_registre_v1(state_file: Path) -> None:
     try:
         ancien = atomique.lire_json(state_file, None, tolerer_corrompu=False)
     except json.JSONDecodeError as erreur:
-        raise OSError(
-            "migration v2 annulée : sauvegarde du registre v1 impossible"
-        ) from erreur
+        raise OSError(msg("registre_migration_annulee")) from erreur
     if not isinstance(ancien, dict) or ancien.get("version") != 1:
         return
     try:
@@ -169,17 +164,15 @@ def _sauvegarder_registre_v1(state_file: Path) -> None:
             sauvegarde = backup.read_bytes()
             chargee = json.loads(sauvegarde)
             if not isinstance(chargee, dict) or chargee.get("version") != 1:
-                raise OSError("sauvegarde v1 invalide")
+                raise OSError(msg("registre_sauvegarde_invalide"))
             return
         temporaire = backup.with_suffix(backup.suffix + ".tmp")
         temporaire.write_bytes(brut)
         temporaire.replace(backup)
         if backup.read_bytes() != brut:
-            raise OSError("sauvegarde v1 non vérifiable")
+            raise OSError(msg("registre_sauvegarde_non_verifiable"))
     except (OSError, json.JSONDecodeError) as erreur:
-        raise OSError(
-            "migration v2 annulée : sauvegarde du registre v1 impossible"
-        ) from erreur
+        raise OSError(msg("registre_migration_annulee")) from erreur
 
 
 def _exclusion_a_retenir(precedente: dict, entree: dict) -> tuple:
@@ -233,6 +226,17 @@ def _ecrire_registre(state_file: Path, state: dict) -> None:
                 entree["excluded"] = excluded
                 if excluded_at is not None:
                     entree["excluded_at"] = excluded_at
+            # Purge par la conservation (issue #120, merge_daily.purger_anciens) :
+            # le brut n'existe plus, le marqueur ne doit jamais reculer devant
+            # une copie de téléchargeur antérieure à la purge.
+            # Une purge manuelle (merge_daily.suivre_purges_manuelles) garde sa
+            # marque avec elle : c'est ce qui la rend réversible.
+            purge = precedente.get("purged_at")
+            if purge and not entree.get("purged_at"):
+                entree = dict(entree)
+                entree["purged_at"] = purge
+                if precedente.get("purge_manuelle"):
+                    entree["purge_manuelle"] = True
         clips[cle] = entree
     fusionne["clips"] = clips
     fusionne["version"] = max(

@@ -19,6 +19,26 @@ import json
 import time
 from urllib.parse import urlencode
 
+import runtime
+
+LIBELLES = {
+    "fr": {
+        "media_indisponible": "Inventaire des événements média indisponible",
+        "reseau_indisponible": "Inventaire des événements réseau indisponible",
+        "aucun_inventaire": "Blink n'a fourni aucun inventaire d'événements valide",
+    },
+    "en": {
+        "media_indisponible": "Media event inventory unavailable",
+        "reseau_indisponible": "Network event inventory unavailable",
+        "aucun_inventaire": "Blink provided no valid event inventory",
+    },
+}
+
+
+def msg(cle: str, **valeurs) -> str:
+    return runtime.traduire(LIBELLES, cle, **valeurs)
+
+
 from blinkpy import api
 
 
@@ -117,7 +137,7 @@ async def request_event_media(blink, time: float, page: int) -> dict:
         response = await api.http_get(blink, url)
         if isinstance(response, dict) and isinstance(response.get("media"), list):
             return response
-    raise RuntimeError("Inventaire des événements média indisponible")  # Media event inventory unavailable
+    raise RuntimeError(msg("media_indisponible"))  # Media event inventory unavailable
 
 
 async def poll(blink) -> list[dict]:
@@ -135,7 +155,7 @@ async def poll(blink) -> list[dict]:
             response = await api.request_sync_events(blink, network)
             entries = response.get("event") if isinstance(response, dict) else None
             if not isinstance(entries, list):
-                raise RuntimeError("Inventaire des événements réseau indisponible")  # Network event inventory unavailable
+                raise RuntimeError(msg("reseau_indisponible"))  # Network event inventory unavailable
             successes += 1
             for entry in entries:
                 event = normalize_event(entry, doorbells, network, now)
@@ -155,7 +175,7 @@ async def poll(blink) -> list[dict]:
                 blink, time=now - EVENT_MAX_AGE_SECONDS, page=page)
             entries = response.get("media") if isinstance(response, dict) else None
             if not isinstance(entries, list):
-                raise RuntimeError("Inventaire des événements média indisponible")  # Media event inventory unavailable
+                raise RuntimeError(msg("media_indisponible"))  # Media event inventory unavailable
             successes += 1
             for entry in entries:
                 event = normalize_event(entry, doorbells, now=now)
@@ -166,5 +186,5 @@ async def poll(blink) -> list[dict]:
     except Exception as error:
         errors.append(error)
     if not successes:
-        raise RuntimeError("Blink n'a fourni aucun inventaire d'événements valide") from errors[-1]  # Blink provided no valid event inventory
+        raise RuntimeError(msg("aucun_inventaire")) from errors[-1]  # Blink provided no valid event inventory
     return sorted(result.values(), key=lambda event: event["timestamp"])

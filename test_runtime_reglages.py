@@ -72,6 +72,18 @@ class TestsReglages(unittest.TestCase):
         self.assertEqual(reglages["timestamp"], runtime.REGLAGES_DEFAUT["timestamp"])
         self.assertEqual(reglages["merge_jour"], runtime.REGLAGES_DEFAUT["merge_jour"])
 
+    def test_arret_auto_du_direct_relu_jusqu_au_plafond_du_serveur(self):
+        """Un 300 en dur ici, resté quand le plafond est passé à 420,
+        relisait comme 0 tout arrêt automatique réglé entre 301 et 420 s."""
+        for valeur in (301, 400, runtime.DIRECT_MAX_SECONDES):
+            with self.subTest(valeur=valeur):
+                (self.dossier / runtime.REGLAGES).write_text(
+                    f'{{"live_auto_stop_seconds": {valeur}}}', encoding="utf-8")
+                self.assertEqual(runtime.lire_reglages()["live_auto_stop_seconds"], valeur)
+        (self.dossier / runtime.REGLAGES).write_text(
+            f'{{"live_auto_stop_seconds": {runtime.DIRECT_MAX_SECONDES + 1}}}', encoding="utf-8")
+        self.assertEqual(runtime.lire_reglages()["live_auto_stop_seconds"], 0)
+
     def test_port_hors_plage_retombe_sur_le_defaut(self):
         (self.dossier / runtime.REGLAGES).write_text('{"port": 99999}', encoding="utf-8")
         self.assertEqual(runtime.lire_reglages()["port"], runtime.REGLAGES_DEFAUT["port"])
@@ -120,7 +132,8 @@ class TestsReglages(unittest.TestCase):
              "doorbell_auto_record_seconds": 30,
              "doorbell_chime_enabled": True,
              "doorbell_poll_interval_seconds": 30,
-             "dossier_sorties": ""})
+             "dossier_sorties": "",
+             **{champ: 0 for champ in runtime.CONSERVATION}})
 
     def test_valeurs_partielles_completees_par_les_defauts(self):
         (self.dossier / runtime.REGLAGES).write_text(
@@ -151,7 +164,8 @@ class TestsReglages(unittest.TestCase):
              "doorbell_auto_record_seconds": runtime.REGLAGES_DEFAUT["doorbell_auto_record_seconds"],
              "doorbell_chime_enabled": runtime.REGLAGES_DEFAUT["doorbell_chime_enabled"],
              "doorbell_poll_interval_seconds": runtime.REGLAGES_DEFAUT["doorbell_poll_interval_seconds"],
-             "dossier_sorties": runtime.REGLAGES_DEFAUT["dossier_sorties"]})
+             "dossier_sorties": runtime.REGLAGES_DEFAUT["dossier_sorties"],
+             **{champ: 0 for champ in runtime.CONSERVATION}})
 
     def test_fuseau_vide_dans_le_fichier_retombe_sur_le_defaut(self):
         (self.dossier / runtime.REGLAGES).write_text(

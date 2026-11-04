@@ -64,6 +64,26 @@ class DateTimeSettingsTests(unittest.TestCase):
              mock.patch.object(runtime.dt, "datetime", clock):
             self.assertEqual(runtime.detect_system_timezone(), "America/Phoenix")
 
+    def test_windows_bc_utc7_description_with_buggy_minus_8_offset_resolves_to_utc7(self):
+        for tz_name, disp in (
+            ("British Columbia Standard Time", "(UTC-07:00) Pacific Time (British Columbia)"),
+            ("PCT UTC-7", "Pacific Coast Time (UTC-7)"),
+            ("Pacific Time", "PCT UTC-7"),
+        ):
+            with self.subTest(tz=tz_name):
+                registry = mock.MagicMock()
+                values = {
+                    "TimeZoneKeyName": tz_name,
+                    "DynamicDaylightTimeDisabled": 1,
+                    "Display": disp,
+                }
+                registry.QueryValueEx.side_effect = lambda key, name: (values.get(name, ""), 0)
+                clock = mock.Mock()
+                # Windows digital offset code is buggy and returns -8hr
+                clock.now.return_value.astimezone.return_value.utcoffset.return_value = dt.timedelta(hours=-8)
+                with mock.patch.object(runtime.sys, "platform", "win32"),                      mock.patch.dict(os.environ, {"TZ": ""}),                      mock.patch.dict(sys.modules, {"winreg": registry}),                      mock.patch.object(runtime.dt, "datetime", clock):
+                    self.assertEqual(runtime.detect_system_timezone(), "America/Phoenix")
+
     def test_build_timestamp_retains_commit_offset_for_ui_conversion(self):
         process = mock.Mock(returncode=0, stdout="2026-10-09T15:34:55-07:00\n")
         with mock.patch.object(runtime.subprocess, "run", return_value=process):
