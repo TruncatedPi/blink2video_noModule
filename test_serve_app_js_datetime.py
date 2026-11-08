@@ -13,7 +13,7 @@ from pathlib import Path
 def formatting_source(source, settings=None):
     settings = settings or {"timezone": "UTC", "date_format": "iso", "time_format": "24h"}
     start = source.index("const AFFICHAGE_DATES =")
-    end = source.index("// Préférence de lecture", start)
+    end = source.index("// ── audio direct (Live View)", start)
     return source[start:end].replace("__DATE_TIME_SETTINGS__", json.dumps(settings))
 
 
@@ -101,7 +101,7 @@ class DateTimeDisplayTests(unittest.TestCase):
         settings = {"timezone": "Etc/GMT+7", "date_format": "mdy", "time_format": "12h"}
         code = formatting_source(self.source, settings)
         code += "\n" + "\n".join(function_source(self.source, n)
-                                 for n in ("card", "dateSnapshot", "renderEvents"))
+                                 for n in ("suppressionProposee", "card", "dateSnapshot", "renderEvents"))
         code += r"""
 const h=String, t=String, duration=String, avecJeton=String;
 const elements={view:{value:"events"},count:{},list:{innerHTML:"",querySelectorAll:()=>[]}};

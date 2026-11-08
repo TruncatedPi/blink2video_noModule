@@ -19,6 +19,7 @@ REGLAGES = {
     "download_auto": True, "initial_setup": False,
     "webhook_token": "jeton-test-abc123",
     "font_size": 40, "font_color": "yellow", "box_opacity": 0.3,
+    "clock": "12h",
     "trusted_host": "100.101.194.5",
     "webhook_notif_url": "https://exemple.invalid/notif",
     "live_auto_stop_seconds": 300,
@@ -76,7 +77,7 @@ const ids = [
   'dateFormat', 'timeFormat', 'cameraAudioEnabled', 'cameraAudioTrack',
   'liveProtocol', 'mergeJour', 'mergeSemaine', 'mergeMois', 'downloadAuto',
   'initialSetupHint', 'reglagesClose', 'stopButton', 'reglages', 'reglagesButton',
-  'webhookUrl', 'webhookRegenerer', 'fontSize', 'fontColor', 'boxOpacity',
+  'webhookUrl', 'webhookRegenerer', 'fontSize', 'fontColor', 'boxOpacity', 'clock',
   'trustedHost', 'webhookNotifUrl', 'liveAutoStopSeconds', 'redemarrerButton',
   'conservationClips', 'conservationJour', 'conservationSemaine', 'conservationMois', 'conservationDirects', 'conservationPhotos',
   'doorbellAlertsEnabled', 'doorbellChimeEnabled', 'doorbellAutoRecord', 'doorbellAutoRecordSeconds', 'doorbellPollSeconds',
@@ -203,6 +204,7 @@ function capturer() {
             "storageDir": "storage_dir", "timezone": "timezone", "dateFormat": "date_format",
             "timeFormat": "time_format", "liveProtocol": "live_protocol",
             "fontSize": "font_size", "fontColor": "font_color", "boxOpacity": "box_opacity",
+            "clock": "clock",
             "trustedHost": "trusted_host", "webhookNotifUrl": "webhook_notif_url",
             "liveAutoStopSeconds": "live_auto_stop_seconds",
             "conservationClips": "conservation_clips",
@@ -265,10 +267,10 @@ function capturer() {
             "reglages": dict(REGLAGES, timestamp=False),
         }], [{"type": "case", "id": "timestamp", "checked": True}])
         premiere = resultat["captures"][0]
-        for identifiant in ("fontSize", "fontColor", "boxOpacity"):
+        for identifiant in ("fontSize", "fontColor", "boxOpacity", "clock"):
             self.assertTrue(premiere["champs"][identifiant]["disabled"])
         apres_coche = resultat["apresActions"][0]
-        for identifiant in ("fontSize", "fontColor", "boxOpacity"):
+        for identifiant in ("fontSize", "fontColor", "boxOpacity", "clock"):
             self.assertFalse(apres_coche["champs"][identifiant]["disabled"])
 
     def test_ouverture_attend_reglages_puis_lance_listes_avant_dialogue(self):

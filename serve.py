@@ -22,6 +22,7 @@ from __future__ import annotations  # Python 3.8 (build Windows 7) : les annotat
 import argparse
 import asyncio
 import concurrent.futures
+import contextlib
 import datetime as dt
 import email.utils
 import hashlib
@@ -181,6 +182,7 @@ LIBELLES = {
         "dossier_stockage_inaccessible": "Dossier de stockage inaccessible : {erreur}",
         "fuseau_inconnu": "Fuseau horaire inconnu : « {fuseau} ».",
         "protocole_inconnu": "Protocole de direct inconnu : « {protocole} ».",
+        "horloge_inconnue": "Format d'heure inconnu : « {horloge} » (24h ou 12h).",
         "couleur_invalide": "Couleur d'horodatage invalide : « {couleur} ».",
         "module_type": "module « {type} »",
         "journal_armement": "{horodatage} {portee} « {nom} » armed={armed} depuis {client}",
@@ -335,6 +337,7 @@ LIBELLES = {
         "dossier_stockage_inaccessible": "Storage folder not accessible: {erreur}",
         "fuseau_inconnu": "Unknown time zone: “{fuseau}”.",
         "protocole_inconnu": "Unknown live view protocol: “{protocole}”.",
+        "horloge_inconnue": "Unknown time format: “{horloge}” (24h or 12h).",
         "couleur_invalide": "Invalid timestamp colour: “{couleur}”.",
         "module_type": "module “{type}”",
         "journal_armement": "{horodatage} {portee} “{nom}” armed={armed} from {client}",
@@ -2577,11 +2580,16 @@ def normaliser_hotes_confiance(valeur: str) -> str:
 
 
 def _verifier_dossier_reglages(dossier: str) -> None:
-    """Éprouve l'écriture sans changer le dossier de stockage actif."""
+    """Éprouve l'écriture sans changer le dossier de stockage actif.
+
+    Le dossier déjà choisi mais absent n'est pas éprouvé : la page renvoie ce
+    chemin à chaque enregistrement, et l'éprouver le recréerait (issue #134)."""
     if not dossier:
         return
     try:
         candidat = Path(dossier).expanduser()
+        if candidat.resolve() == runtime.dossier_sorties_manquant():
+            return
         candidat.mkdir(parents=True, exist_ok=True)
         # Création exclusive : ni fichier existant écrasé, ni collision entre
         # deux requêtes. Le contexte ferme et supprime uniquement sa sonde,
@@ -2658,6 +2666,13 @@ def _preparer_reglages_web(payload: dict) -> tuple[str, dict]:
     except (TypeError, ValueError) as erreur:
         raise _ReglagesInvalides(msg("reglage_opacite_invalide")) from erreur
     reglages["box_opacity"] = box_opacity
+
+    # Absent (page restée ouverte depuis une version sans ce réglage) : garder
+    # le format enregistré plutôt que de revenir en silence au 24 h.
+    clock = payload.get("clock", runtime.lire_reglages()["clock"])
+    if clock not in runtime.HORLOGES:
+        raise _ReglagesInvalides(msg("horloge_inconnue", horloge=clock))
+    reglages["clock"] = clock
 
     try:
         reglages["trusted_host"] = normaliser_hotes_confiance(
@@ -2986,7 +3001,7 @@ class Handler(serveweb.Handler):
             # écraserait le fichier temporaire du premier en plein envoi.
             with _verrou_miniature(str(thumb)):
                 if not fraiche():
-                    thumb.parent.mkdir(parents=True, exist_ok=True)
+                    runtime.creer_sous_sorties(thumb.parent)
                     pending = thumb.with_suffix(".tmp.jpg")
                     # Deux extractions à la fois au plus : le navigateur réclame
                     # toutes les vignettes de la page d'un coup, et autant de
@@ -3357,7 +3372,7 @@ class Handler(serveweb.Handler):
                 MODULE_SLOT.release()
 
         dossier = self.paths["snapshots"] / safe_file(resultat["nom"])
-        dossier.mkdir(parents=True, exist_ok=True)
+        runtime.creer_sous_sorties(dossier)
         horodatage = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%SZ")
         # Empreinte du contenu, pas un compteur : deux déclenchements dans la
         # même seconde (double clic, webhook rapproché) écrasaient sinon
@@ -3383,7 +3398,7 @@ class Handler(serveweb.Handler):
         """Même remplacement atomique que send_camera_thumb, réutilisable
         pour republier une image déjà en main sans repasser par Blink."""
         cache = self.paths["thumbs"] / "cameras" / f"{safe_file(identity)}.jpg"
-        cache.parent.mkdir(parents=True, exist_ok=True)
+        runtime.creer_sous_sorties(cache.parent)
         attente = cache.with_suffix(".tmp.jpg")
         attente.write_bytes(corps)
         attente.replace(cache)
@@ -3610,6 +3625,7 @@ class Handler(serveweb.Handler):
         Une demande explicite de rafraîchissement relit l'image conservée par
         Blink. En cas d'échec, la dernière image locale reste disponible."""
         cached = (self.paths["thumbs"] / "cameras" / f"{safe_file(identity)}.jpg")
+        body = b""
         if refresh or not (cached.is_file() and cached.stat().st_size > 0):
             def fetch(blink):
                 async def run(_blink=blink):
@@ -3630,9 +3646,12 @@ class Handler(serveweb.Handler):
                 self.send_error(404)
                 return
             if body:
-                self._ecrire_vignette_camera(identity, body)
+                # Dossier des vidéos absent : l'image reçue s'affiche quand
+                # même, seul son cache attendra le retour du disque.
+                with contextlib.suppress(runtime.DossierSortiesAbsent):
+                    self._ecrire_vignette_camera(identity, body)
 
-        body = cached.read_bytes()
+        body = body or cached.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", "image/jpeg")
         self.send_header("Cache-Control", "no-store")
@@ -4153,7 +4172,7 @@ class Handler(serveweb.Handler):
                         holder.get("camera_name", name)
                     )
                     try:
-                        chemin.parent.mkdir(parents=True, exist_ok=True)
+                        runtime.creer_sous_sorties(chemin.parent)
                         fichier_direct = chemin.open("wb")
                         init_seg = _extraire_init_segment(first)
                         fichier_direct.write(init_seg)
@@ -4733,7 +4752,9 @@ class Handler(serveweb.Handler):
             # tout le registre des clips comme /api/passages. Sur un vieux PC
             # Windows 7, parser ce JSON croissant toutes les trois secondes
             # coûterait bien plus que la lecture du seul état de progression.
-            self.send_json({"travail": runtime.travail_affichable()})
+            manquant = runtime.dossier_sorties_manquant()
+            self.send_json({"travail": runtime.travail_affichable(),
+                            "dossier_absent": str(manquant) if manquant else ""})
             return
 
         if route == "/api/refresh":
@@ -5702,6 +5723,7 @@ __CSS__
     <button class="btn-lang" data-lang-btn="en">EN</button>
   </span>
   <div id="work"><span id="phase"></span><progress id="bar"></progress></div>
+  <p id="dossierAbsent" role="alert" hidden></p>
 </header>
 <div id="doorbellAlertBanner" class="doorbellAlertBanner" hidden>
   <div class="alertIcon">🔔</div>
@@ -5894,6 +5916,13 @@ __CSS__
         <label for="fontColor" data-i18n="reglages.fontColor">Couleur</label>
         <input type="text" id="fontColor" list="couleursCourantes" placeholder="white">
       </div>
+      <div class="champCadence">
+        <label for="clock" data-i18n="reglages.clock">Format de l'heure</label>
+        <select id="clock">
+          <option value="24h" data-i18n="reglages.clock.24h">24 h (14:05:09)</option>
+          <option value="12h" data-i18n="reglages.clock.12h">12 h (02:05:09 PM)</option>
+        </select>
+      </div>
       <datalist id="couleursCourantes">
         <option value="white">
         <option value="yellow">
@@ -5926,21 +5955,6 @@ __CSS__
            title="Arrête le direct tout seul après ce délai, jusqu'à 420 s, même en direct continu. Vide ou 0 : pas d'arrêt automatique ; Blink ferme de lui-même chaque direct au bout d'environ 6 minutes, et la case « Direct continu » d'une caméra le relance.">
         <label for="liveAutoStopSeconds" data-i18n="reglages.liveAutoStop">Arrêt auto du direct (s)</label>
         <input type="number" id="liveAutoStopSeconds" min="0" max="420" placeholder="0">
-      </div>
-    </fieldset>
-    <fieldset>
-      <legend data-i18n="reglages.cameraAudio.title">Audio de la caméra</legend>
-      <label>
-        <input type="checkbox" id="cameraAudioEnabled">
-        <span data-i18n="reglages.cameraAudio">Inclure le son de la caméra dans le direct et les enregistrements</span>
-      </label>
-      <p class="sub tiny" data-i18n="reglages.cameraAudio.hint">Avec le son, les directs utilisent le mode compatible MSE et peuvent démarrer plus lentement. La lecture commence en sourdine ; écouter le son ne change pas l'enregistrement.</p>
-      <div class="champCadence">
-        <label for="cameraAudioTrack" data-i18n="reglages.cameraAudio.track">Canal audio</label>
-        <select id="cameraAudioTrack">
-          <option value="0" data-i18n="reglages.cameraAudio.primary">Principal</option>
-          <option value="1" data-i18n="reglages.cameraAudio.alternate">Alternatif (si le principal reste silencieux)</option>
-        </select>
       </div>
     </fieldset>
     <fieldset>

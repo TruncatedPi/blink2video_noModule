@@ -42,7 +42,7 @@ import _amorcage
 # workflow de release refuse une étiquette qui ne lui correspond pas. Un binaire
 # doit pouvoir dire ce qu'il est, ne serait-ce que pour qu'un rapport de bogue
 # soit exploitable.
-VERSION = "0.26.2"
+VERSION = "0.28.4"
 WINDOWS7_BUILD_MARKER = "windows7-build.txt"
 
 
@@ -103,7 +103,7 @@ def detect_system_timezone() -> str:
                 hours = offset.total_seconds() / 3600 if offset is not None else None
                 # BC / PCT timezone on Windows: description specifies UTC-7 (e.g. PCT UTC-7,
                 # (UTC-07:00) Pacific Time (British Columbia)), but digital offset codes may remain -8hr.
-                if hours == -7 or re.search(r"UTC[- ]?0?7(?::00)?(?:|$|[ )])", desc, re.IGNORECASE) or "British Columbia" in desc:
+                if hours == -7 or re.search(r"UTC[- ]?0?7(?::00)?(?:\b|$|[ )])", desc, re.IGNORECASE) or "British Columbia" in desc:
                     return "America/Phoenix"
                 if hours is not None and hours.is_integer():
                     name = "UTC" if hours == 0 else f"Etc/GMT{-int(hours):+d}"
@@ -172,7 +172,9 @@ REGLAGES_DEFAUT = {"usb_minutes": 10, "cloud_minutes": 1, "port": 8765, "timesta
                    "camera_audio_enabled": False, "camera_audio_track": 0,
                    "font_size": None, "font_color": "white", "box_opacity": 0.55,
                    "trusted_host": "", "webhook_notif_url": "",
-                   "live_auto_stop_seconds": 0,
+                    "live_auto_stop_seconds": 0,
+                   # Heure incrustée : "24h" ou "12h" (AM/PM).
+                   "clock": "24h",
                    # Doorbell event alert and live recording settings
                    "doorbell_alerts_enabled": True,
                    "doorbell_auto_record": False,
@@ -231,6 +233,8 @@ _ALIASES_FORMAT_DATE = {
 FORMATS_HEURE_VALIDES = ("24h", "12h")
 
 PROTOCOLES_LIVE_VALIDES = ("webrtc", "mse")
+# Formats de l'heure incrustée, repris par merge_daily --clock.
+HORLOGES = ("24h", "12h")
 # Hebdo et mensuel réencodaient par défaut la même matière que le quotidien
 # (chaque assemblage ré-encode ses clips, jamais un simple regroupement de
 # fichiers) : sur une installation neuve, ce triplement silencieux de
@@ -373,6 +377,8 @@ def lire_reglages() -> dict:
         "live_auto_stop_seconds": _entier_borne(
             valeurs, "live_auto_stop_seconds",
             REGLAGES_DEFAUT["live_auto_stop_seconds"], 0, DIRECT_MAX_SECONDES),
+        "clock": valeurs.get("clock") if valeurs.get("clock") in HORLOGES
+        else REGLAGES_DEFAUT["clock"],
         "doorbell_alerts_enabled": _booleen(
             valeurs, "doorbell_alerts_enabled",
             REGLAGES_DEFAUT["doorbell_alerts_enabled"]),
@@ -424,6 +430,7 @@ def ecrire_reglages(usb_minutes: int, cloud_minutes: int, port: int, timestamp: 
                     box_opacity: float = 0.55, trusted_host: str = "",
                     webhook_notif_url: str = "",
                     live_auto_stop_seconds: int = 0,
+                    clock: str = "24h",
                     doorbell_alerts_enabled: bool | None = None,
                     doorbell_auto_record: bool | None = None,
                     doorbell_auto_record_seconds: int | None = None,
@@ -491,6 +498,7 @@ def ecrire_reglages(usb_minutes: int, cloud_minutes: int, port: int, timestamp: 
         "trusted_host": str(trusted_host).strip(),
         "webhook_notif_url": str(webhook_notif_url).strip(),
         "live_auto_stop_seconds": int(live_auto_stop_seconds),
+        "clock": clock if clock in HORLOGES else "24h",
         "doorbell_alerts_enabled": bool(doorbell_alerts_enabled),
         "doorbell_auto_record": bool(doorbell_auto_record),
         "doorbell_auto_record_seconds": int(doorbell_auto_record_seconds),
@@ -568,6 +576,7 @@ _LIBELLES_RUNTIME = {
         "verrou_inaccessible": "verrou en cours de suppression ou inaccessible : {fichier}",
         "publication_en_cours": "publication de progression en cours",
         "verbe_inconnu": "verbe inconnu : {verbe}",
+        "dossier_sorties_absent": "Dossier des vidéos introuvable : {dossier}. Rien n'y sera écrit tant qu'il n'est pas revenu. Son disque est-il monté ?",
     },
     "en": {
         "repetition": "Repeating every {minutes} min. Ctrl+C to stop.",
@@ -592,6 +601,7 @@ _LIBELLES_RUNTIME = {
         "verrou_inaccessible": "lock being removed or not accessible: {fichier}",
         "publication_en_cours": "progress publication in progress",
         "verbe_inconnu": "unknown verb: {verbe}",
+        "dossier_sorties_absent": "Videos folder not found: {dossier}. Nothing will be written there until it is back. Is its disk mounted?",
     },
 }
 
@@ -681,6 +691,8 @@ def options_fusion(reglages: dict) -> list:
             options += ["--font-color", reglages["font_color"]]
         if reglages["box_opacity"] != 0.55:
             options += ["--box-opacity", str(reglages["box_opacity"])]
+        if reglages["clock"] != "24h":
+            options += ["--clock", reglages["clock"]]
     if not reglages["merge_semaine"]:
         options.append("--no-weekly")
     if not reglages["merge_mois"]:
@@ -1111,6 +1123,51 @@ def dossier_sorties() -> Path:
     return _sorties_par_defaut()
 
 
+class DossierSortiesAbsent(OSError):
+    """Le dossier choisi dans les réglages n'est pas là. C'est un OSError : les
+    écritures qui survivent déjà à un disque plein survivent aussi à celui-ci."""
+
+
+def dossier_sorties_manquant() -> Path | None:
+    """Dossier choisi dans les réglages s'il a disparu, None sinon.
+
+    Issue #134 : un dossier choisi sur un disque à part, encore démonté au
+    démarrage, ne doit pas renaître sur le disque système. Les clips y seraient
+    masqués au montage, et absents de la sauvegarde. Seul un dossier choisi est
+    concerné : celui par défaut et BLINK_HOME (un volume Docker neuf, par
+    exemple) se créent à la demande. Un point de montage vide existe, lui, et
+    passe : d'où le conseil du README de choisir un sous-dossier du disque."""
+    choisi = lire_reglages().get("dossier_sorties")
+    if not choisi:
+        return None
+    dossier = Path(choisi).expanduser().resolve()
+    # os.path, pas Path.is_dir() : un refus d'accès y vaut absence, sans lever.
+    return None if os.path.isdir(dossier) else dossier
+
+
+def exiger_dossier_sorties(chemin: Path) -> None:
+    """Lève DossierSortiesAbsent si `chemin` est sous un dossier choisi absent.
+
+    Un chemin ailleurs (--output explicite) reste libre."""
+    manquant = dossier_sorties_manquant()
+    if manquant is None:
+        return
+    cible = Path(chemin).resolve()
+    if cible == manquant or manquant in cible.parents:
+        raise DossierSortiesAbsent(_msg("dossier_sorties_absent", dossier=manquant))
+
+
+def creer_sous_sorties(dossier: Path) -> None:
+    """mkdir de tout ce qui s'écrit sous dossier_sorties().
+
+    Passer par ici est la règle : un seul mkdir(parents=True) direct, pour une
+    simple vignette, recréerait le dossier absent, et toutes les écritures
+    repartiraient sur le disque système. Seul le choix du dossier dans les
+    réglages le crée, voir ecrire_dossier_stockage()."""
+    exiger_dossier_sorties(dossier)
+    dossier.mkdir(parents=True, exist_ok=True)
+
+
 def ajouter_ligne(nom_fichier: str, ligne: str) -> None:
     """Ajoute une ligne à un fichier de app_dir(), append-only, jamais fatal.
 
@@ -1156,11 +1213,15 @@ def ecrire_dossier_stockage(chemin: str, *, reglages: dict | None = None,
     suivants iront dans le nouveau dossier. L'état (session, réglages) ne le
     suit plus, il reste dans app_dir(). Le dossier est créé d'abord : un
     emplacement inutilisable (lecteur absent, droits) est refusé avant
-    d'être enregistré.
+    d'être enregistré. Sauf le dossier déjà choisi s'il est absent : la page
+    renvoie ce chemin à chaque enregistrement, et changer un autre réglage
+    disque démonté ne doit pas le recréer (issue #134).
     """
     chemin = chemin.strip()
     valeur = str(Path(chemin).expanduser().resolve()) if chemin else ""
-    (Path(valeur) if valeur else _sorties_par_defaut()).mkdir(parents=True, exist_ok=True)
+    cible = Path(valeur) if valeur else _sorties_par_defaut()
+    if cible != dossier_sorties_manquant():
+        cible.mkdir(parents=True, exist_ok=True)
 
     # Le parent start surveille le marqueur initial pour lancer les workers.
     # Garder les réglages exacts permet de les rétablir si cette dernière

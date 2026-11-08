@@ -57,7 +57,7 @@ and the main settings.
 - Camera state at a glance: battery, temperature, signal, model and firmware
   for each camera.
 - Date and time burned into the picture, so any player keeps it. Size,
-  color and background opacity all configurable.
+  color, background opacity and 24h or 12h (AM/PM) clock all configurable.
 - One video per day, per ISO week and per month, for each camera.
 - Uninteresting clips discarded in one click, moved aside rather than deleted,
   and never downloaded again.
@@ -120,6 +120,20 @@ Changing views, gallery pages or filters, or reloading the page, resets playback
 to muted. Playback mute does not change the audio saved in a recording.
 Previously saved silent recordings remain silent.
 
+To include camera audio in live listening and recordings, enable
+**Settings → Video → Include camera audio in Live View and recordings**.
+This is off by default and applies to new sessions. Audio-enabled sessions
+use compatible MSE mode, which can take longer to start. Use **Listen/Mute**
+in Live View or the saved video's volume controls. If the primary channel
+stays silent, try **Alternate** in Settings. A missing audio track still
+produces playable video.
+
+Playback starts muted. Unmuting a video shares that choice and volume with
+other videos on the same page, including players recreated while scrolling.
+Changing views, gallery pages or filters, or reloading the page, resets playback
+to muted. Playback mute does not change the audio saved in a recording.
+Previously saved silent recordings remain silent.
+
 ![The Clips tab](Screenshots/serve0.PNG)
 
 Clips newest first. Each card gives the camera, the duration, the date and
@@ -146,7 +160,7 @@ UTC filenames and stored timestamps retain their original meaning.
 Settings, behind the gear icon: automatic startup with the session, automatic
 page refresh, server port, videos folder with a native folder picker, and local
 storage and cloud polling cadence. Also timestamp burned into the picture
-with its size, color and background opacity, time zone, the live view
+with its size, color, background opacity and 24h/12h clock, time zone, the live view
 protocol (WebRTC or MSE), daily/weekly/monthly archiving toggled
 independently per period, per-camera alert muting,
 automatic deletion after download per camera, and a button to stop the
@@ -503,6 +517,19 @@ everything in one folder of your choice. Coming from 0.13 or earlier, the first
 launch copies the settings and the session over, and the videos stay where
 they are: the videos folder points to them.
 
+### Videos on a separate disk
+
+A folder chosen in Settings is only ever created at that moment. If it is
+missing later, say the disk is not mounted yet at boot, blink2video does not
+recreate it on the system disk: downloads wait for it and start as soon as it
+is back, assembling skips its turn, and a red banner names the folder in the
+page. Settings stay usable meanwhile, and you can point them elsewhere.
+
+Choose a subfolder of the disk, such as `/export/cam/blink2video`, rather than
+the mount point itself: an unmounted mount point is still an empty folder, and
+nothing can tell it from the real one. The default folder and `BLINK_HOME` are
+still created on demand.
+
 ### Keeping files for a limited time
 
 Nothing is ever deleted by default. In Settings, "Retention" gives each
@@ -669,6 +696,7 @@ assembles, while `serve`, or any verb given `--loop`, holds its own process unti
 | `--font-size N` | timestamp size in pixels, 8 to 500 (default: scales with the video's height) |
 | `--font-color COLOR` | timestamp color: a name (`white`, `yellow`...) or hex (`#RRGGBB`, `0xRRGGBB`), optionally with `@opacity` (e.g. `white@0.8`), default `white` |
 | `--box-opacity N` | opacity of the band behind the timestamp, `0.0` (invisible) to `1.0` (opaque), default `0.55` |
+| `--clock 24h\|12h` | time format of the timestamp: `24h` (`14:05:09`, default) or `12h` (`02:05:09 PM`) |
 | `--timezone ZONE` | time zone of the timestamp (default `Europe/Paris`) |
 | `--input`, `--output`, `--normalized-output`, `--excluded-output`, `--weekly-output`, `--monthly-output` | location of each folder |
 

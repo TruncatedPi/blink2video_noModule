@@ -215,6 +215,7 @@ const I18N = {
     "reglages.auto.title": "Recharger la liste dès que des clips arrivent",
     "reglages.showOut": "Voir les clips écartés",
     "reglages.serveur": "Port du serveur",
+    "dossier.absent": "Dossier des vidéos introuvable : {dossier}. Rien n'est écrit ailleurs en attendant son retour. Montez son disque, ou choisissez un autre dossier dans les réglages.",
     "reglages.storageDir": "Dossier des vidéos",
     "reglages.storageDir.placeholder": "C:/chemin/vers/le/dossier",
     "reglages.storageDir.hint": "Clips, vidéos assemblées, directs et captures. Ne déplace pas ceux déjà enregistrés à l'ancien emplacement : à faire vous-même si vous changez ce chemin. Vide = emplacement par défaut, Documents/blink2video.",
@@ -230,6 +231,8 @@ const I18N = {
     "reglages.timestamp.style.hint": "Vide = taille automatique selon la hauteur de la vidéo. Couleur : nom (white, yellow…) ou hexadécimal, éventuellement avec une transparence (ex. white@0.8).",
     "reglages.fontSize": "Taille de police", "reglages.fontColor": "Couleur",
     "reglages.boxOpacity": "Opacité du bandeau",
+    "reglages.clock": "Format de l'heure",
+    "reglages.clock.24h": "24 h (14:05:09)", "reglages.clock.12h": "12 h (02:05:09 PM)",
     "reglages.timezone": "Fuseau horaire",
     "reglages.cameraAudio.title": "Audio de la caméra",
     "reglages.cameraAudio": "Inclure le son de la caméra dans le direct et les enregistrements",
@@ -405,6 +408,11 @@ const I18N = {
     "clip.deleteSource.pending": "Suppression…",
     "clip.deleteSource.title": "Supprimer ce clip de sa source (stockage local ou cloud de l'abonnement). La copie déjà téléchargée ici n'est pas touchée. Peut prendre jusqu'à une minute pour le stockage local.",
     "selection.apply": "✓ Appliquer ({n})",
+    "selection.page": "Cette page :",
+    "selection.page.discard": "Tout écarter",
+    "selection.page.discard.title": "Cocher (ou décocher) « Écarter » sur tous les clips de cette page. Rien n'est fait avant Appliquer.",
+    "selection.page.delete": "Tout supprimer",
+    "selection.page.delete.title": "Cocher (ou décocher) « Supprimer » sur tous les clips de cette page. Rien n'est supprimé avant Appliquer et sa confirmation.",
     "selection.confirm.suppression": "{n} clip(s) vont être supprimés de leur source (stockage local USB/microSD ou cloud de l'abonnement). Les copies déjà téléchargées ne sont pas touchées. Continuer ?",
     "selection.partial": "{n} suppression(s) ont échoué ou n'ont rien trouvé à supprimer (déjà retiré ailleurs). Le reste de la sélection a été appliqué.",
     "refresh.starting": "Démarrage…", "refresh.errors": "Terminé avec des erreurs",
@@ -478,6 +486,7 @@ const I18N = {
     "reglages.auto.title": "Reload the list as soon as clips arrive",
     "reglages.showOut": "Show discarded clips",
     "reglages.serveur": "Server port",
+    "dossier.absent": "Videos folder not found: {dossier}. Nothing is written elsewhere while waiting for it. Mount its disk, or choose another folder in Settings.",
     "reglages.storageDir": "Videos folder",
     "reglages.storageDir.placeholder": "C:/path/to/the/folder",
     "reglages.storageDir.hint": "Clips, assembled videos, lives and snapshots. Does not move those already saved at the old location: do it yourself if you change this path. Empty = default location, Documents/blink2video.",
@@ -493,6 +502,8 @@ const I18N = {
     "reglages.timestamp.style.hint": "Empty = size automatically scaled to the video's height. Color: a name (white, yellow…) or hex code, optionally with transparency (e.g. white@0.8).",
     "reglages.fontSize": "Font size", "reglages.fontColor": "Color",
     "reglages.boxOpacity": "Box opacity",
+    "reglages.clock": "Time format",
+    "reglages.clock.24h": "24h (14:05:09)", "reglages.clock.12h": "12h (02:05:09 PM)",
     "reglages.timezone": "Time zone",
     "reglages.cameraAudio.title": "Camera audio",
     "reglages.cameraAudio": "Include camera audio in Live View and recordings",
@@ -668,6 +679,11 @@ const I18N = {
     "clip.deleteSource.pending": "Deleting…",
     "clip.deleteSource.title": "Delete this clip from its source (local storage or subscription cloud). The copy already downloaded here is not affected. Can take up to a minute for local storage.",
     "selection.apply": "✓ Apply ({n})",
+    "selection.page": "This page:",
+    "selection.page.discard": "Discard all",
+    "selection.page.discard.title": "Tick (or untick) “Discard” on every clip of this page. Nothing happens before Apply.",
+    "selection.page.delete": "Delete all",
+    "selection.page.delete.title": "Tick (or untick) “Delete” on every clip of this page. Nothing is deleted before Apply and its confirmation.",
     "selection.confirm.suppression": "{n} clip(s) will be deleted from their source (local USB/microSD storage or subscription cloud). Copies already downloaded here are not affected. Continue?",
     "selection.partial": "{n} deletion(s) failed or found nothing to delete (already removed elsewhere). The rest of the selection was applied.",
     "refresh.starting": "Starting…", "refresh.errors": "Finished with errors",
@@ -1296,6 +1312,12 @@ async function etatDuTravail() {
   try {
     const etat = await lireJSON(await fetch("/api/travail", { cache: "no-store" }));
     if (generation === generationMaj) montrerTravail(etat.travail);
+    // Issue #134 : sans ce bandeau, un disque démonté ressemble à une galerie
+    // vide, et rien ne dit que les clips attendent ailleurs.
+    const bandeau = $("dossierAbsent");
+    bandeau.hidden = !etat.dossier_absent;
+    bandeau.textContent = etat.dossier_absent
+      ? tf("dossier.absent", { dossier: etat.dossier_absent }) : "";
   } catch (erreur) { /* le prochain passage réessaiera */ }
 }
 
@@ -2904,6 +2926,8 @@ const CLIPS_PAR_PAGE = 50;
 const TAILLES_PAGE_CLIPS = [25, 50, 100, 0];
 const CLE_TAILLE_PAGE_CLIPS = "blink2video.clipsParPage";
 let pageClips = 0;
+// Les clips de la page affichée, ceux que cochent les cases « Cette page » (issue #40).
+let trancheAffichee = [];
 // La barre du haut (figée sous l'en-tête) prend de la place et n'intéresse pas tout le monde : une
 // case du panneau Réglages la masque, propre à ce navigateur comme la taille des vignettes. Celle du
 // bas de la liste reste, pour changer de page.
@@ -3080,10 +3104,12 @@ function renderClips() {
   const tranche = clips.slice(pageClips * taille, (pageClips + 1) * taille);
   const navigation = navigationClips(clips.length, pages);
   const days = [...new Set(tranche.map((c) => c.day))];
-  $("list").innerHTML = (barrePaginationHaute ? navigation : "") + days.map((day) => `
+  trancheAffichee = tranche;
+  $("list").innerHTML = (barrePaginationHaute ? navigation : "") + barreSelectionPage() + days.map((day) => `
     <h2>${h(dateLocale(day))}</h2>
     <div class="grid">${tranche.filter((c) => c.day === day).map(card).join("")}</div>
   `).join("") + navigation;
+  majSelectionPage();
   preparerLecteursClips();
 }
 
@@ -3140,7 +3166,6 @@ function renderVideos(kind) {
         .map((v) => videoCard(v, parJour)).join("")}
     </div>
   `).join("");
-  preparerAudioListe();
 }
 
 // Le nom du fichier porte l'horodatage UTC (déclencherSnapshot, serve.py) :
@@ -3286,6 +3311,69 @@ function preparerLecteursClips() {
   };
 }
 
+// Une carte ne propose « Supprimer » que si le clip est encore à sa source et
+// que la caméra ne le supprime pas déjà d'elle-même après téléchargement.
+function suppressionProposee(c) {
+  return !c.sourceDeleted
+    && !(c.kind === "clip" && (data.suppressionAuto || []).includes(c.cameraKey));
+}
+
+// « Cette page » (issue #40, demandé par rmoosreiner) : cocher d'un geste
+// toutes les cartes de la page affichée, plutôt que cinquante cases une à
+// une. Rien de plus qu'un raccourci vers les cases des cartes : la
+// suppression attend toujours Appliquer et sa confirmation. La page seule,
+// pas tout le filtre : on coche ce qu'on a sous les yeux, jamais des clips
+// qu'on n'a pas vus.
+function casesPage() {
+  return [
+    ["stage-page-exclusion", "stage-exclusion", "excludedStaged", trancheAffichee],
+    ["stage-page-suppression", "stage-suppression", "supprimerStaged",
+     trancheAffichee.filter(suppressionProposee)],
+  ];
+}
+
+function barreSelectionPage() {
+  if (!trancheAffichee.length) return "";
+  const [, [, , , supprimables]] = casesPage();
+  return `<div class="selectionPage">
+    <span>${h(t("selection.page"))}</span>
+    <label class="act" title="${h(t("selection.page.discard.title"))}">
+      <input type="checkbox" data-action="stage-page-exclusion">
+      ${h(t("selection.page.discard"))}
+    </label>
+    ${supprimables.length ? `
+    <label class="act" title="${h(t("selection.page.delete.title"))}">
+      <input type="checkbox" data-action="stage-page-suppression">
+      ${h(t("selection.page.delete"))}
+    </label>` : ""}
+  </div>`;
+}
+
+// Cochée quand toute la page l'est, à moitié (indeterminate) quand une partie
+// seulement : l'état se lit sur la case sans compter les cartes.
+function majSelectionPage() {
+  for (const [action, , champ, clips] of casesPage()) {
+    const caseMaitre = $("list").querySelector(`[data-action="${action}"]`);
+    if (!caseMaitre) continue;
+    const n = clips.filter((c) => c[champ]).length;
+    caseMaitre.checked = n > 0 && n === clips.length;
+    caseMaitre.indeterminate = n > 0 && n < clips.length;
+  }
+}
+
+// Coche les cases des cartes sans repeindre la liste : un rendu complet
+// détruirait les lecteurs vidéo de la page.
+function stagerPage(action, coche) {
+  const [, actionCarte, champ, clips] = casesPage().find(([a]) => a === action);
+  for (const c of clips) c[champ] = coche;
+  for (const caseCarte of $("list").querySelectorAll(`input[data-action="${actionCarte}"]`)) {
+    const clip = clips.find((c) => c.identity === caseCarte.dataset.identity);
+    if (clip) caseCarte.checked = coche;
+  }
+  majBoutonAppliquer();
+  majSelectionPage();
+}
+
 function card(c) {
   const horodatage = dateHeure(c.created_at)
     || [dateLocale(c.day), heureLocale(c.time)].filter(Boolean).join(" ");
@@ -3306,9 +3394,7 @@ function card(c) {
                data-action="stage-exclusion" data-identity="${h(c.identity)}">
         ${h(t("clip.discard"))}
       </label>
-      ${c.sourceDeleted
-        || (c.kind === "clip" && (data.suppressionAuto || []).includes(c.cameraKey))
-        ? "" : `
+      ${!suppressionProposee(c) ? "" : `
       <label class="act" title="${h(t("clip.deleteSource.title"))}">
         <input type="checkbox" ${c.supprimerStaged ? "checked" : ""}
                data-action="stage-suppression" data-identity="${h(c.identity)}">
@@ -3867,6 +3953,7 @@ function afficherFormulaireReglages(reglages) {
   $("fontSize").value = reglages.font_size ?? "";
   $("fontColor").value = reglages.font_color;
   $("boxOpacity").value = reglages.box_opacity;
+  $("clock").value = reglages.clock || "24h";
   appliquerDependanceTimestamp();
   $("timezone").value = reglages.timezone;
   $("dateFormat").value = reglages.date_format || "iso";
@@ -4027,6 +4114,7 @@ function appliquerDependanceTimestamp() {
   $("fontSize").disabled = !actif;
   $("fontColor").disabled = !actif;
   $("boxOpacity").disabled = !actif;
+  $("clock").disabled = !actif;
 }
 $("timestamp").onchange = appliquerDependanceTimestamp;
 
@@ -4172,6 +4260,7 @@ async function envoyerFormulaireReglages({ usb, cloud, port, timezone }) {
       font_size: $("fontSize").value.trim() ? parseInt($("fontSize").value, 10) : null,
       font_color: $("fontColor").value.trim(),
       box_opacity: parseFloat($("boxOpacity").value),
+      clock: $("clock").value,
       doorbell_alerts_enabled: $("doorbellAlertsEnabled") ? $("doorbellAlertsEnabled").checked : true,
       doorbell_chime_enabled: $("doorbellChimeEnabled") ? $("doorbellChimeEnabled").checked : true,
       doorbell_auto_record: $("doorbellAutoRecord") ? $("doorbellAutoRecord").checked : false,
@@ -4414,8 +4503,13 @@ $("list").addEventListener("change", (event) => {
     changerPageClips(0, "size", Number(cible.value));
   } else if (cible.dataset.action === "stage-exclusion") {
     stagerExclusion(cible.dataset.identity, cible.checked);
+    majSelectionPage();
   } else if (cible.dataset.action === "stage-suppression") {
     stagerSuppression(cible.dataset.identity, cible.checked);
+    majSelectionPage();
+  } else if (cible.dataset.action === "stage-page-exclusion"
+             || cible.dataset.action === "stage-page-suppression") {
+    stagerPage(cible.dataset.action, cible.checked);
   }
 });
 $("applyButton").onclick = appliquerSelection;

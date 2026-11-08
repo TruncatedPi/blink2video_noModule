@@ -164,6 +164,7 @@ LIBELLES = {
         "cloud_supprime_auto": "    Supprimé du cloud (caméra en suppression automatique).",
         "cloud_suppression_echec": "    ! Échec de la suppression sur le cloud (clip conservé là-bas).",
         "echec_categorie": "    Échec [{categorie}] : {detail}.",
+        "dossier_sorties_retrouve": "Dossier des vidéos de retour : reprise.",
         "cloud_termine":
             "  Terminé : {downloaded} téléchargé(s), {adopted} adopté(s), "
             "{skipped} ignoré(s), {failed} échec(s).",
@@ -197,6 +198,10 @@ LIBELLES = {
         "travail_telechargement_clips": "Téléchargement des clips",
         "travail_inventaire_clips": "Inventaire des clips",
         "journal_clips_annonces": "{n} clip(s) annoncé(s)",
+        "journal_inventaire": "inventaire  {source} : registre {connus}, nouveaux {nouveaux}, déjà acquis {deja}",
+        "journal_liste_vide": "inventaire  {source} : liste vide (registre {connus})",
+        "journal_liste_revenue": "inventaire  {source} : liste revenue, {lus} clip(s)",
+        "journal_echecs": "échecs  {source} : {n} clip(s) [{categorie}] {detail}, dont {exemple}",
     },
     "en": {
         "direct_premier_octet": "[direct] {horodatage} {camera}: first video byte from the relay",
@@ -209,6 +214,7 @@ LIBELLES = {
         "cloud_supprime_auto": "    Deleted from the cloud (camera set to auto-delete).",
         "cloud_suppression_echec": "    ! Failed to delete from the cloud (clip kept there).",
         "echec_categorie": "    Failed [{categorie}]: {detail}.",
+        "dossier_sorties_retrouve": "Videos folder is back: resuming.",
         "cloud_termine":
             "  Done: {downloaded} downloaded, {adopted} adopted, "
             "{skipped} skipped, {failed} failed.",
@@ -241,6 +247,10 @@ LIBELLES = {
         "travail_telechargement_clips": "Downloading clips",
         "travail_inventaire_clips": "Listing clips",
         "journal_clips_annonces": "{n} clip(s) announced",
+        "journal_inventaire": "inventory  {source}: registry {connus}, new {nouveaux}, already acquired {deja}",
+        "journal_liste_vide": "inventory  {source}: empty listing (registry {connus})",
+        "journal_liste_revenue": "inventory  {source}: listing back, {lus} clip(s)",
+        "journal_echecs": "failures  {source}: {n} clip(s) [{categorie}] {detail}, including {exemple}",
     },
 }
 
@@ -404,7 +414,7 @@ async def download_clip(blink: Blink, clip, target: Path, overwrite: bool) -> st
             if md.valid_mp4_complet(target) and not overwrite:
                 return "skipped"
         etape = "local"
-        target.parent.mkdir(parents=True, exist_ok=True)
+        runtime.creer_sous_sorties(target.parent)
         partial = target.with_suffix(target.suffix + ".part")
         partial.unlink(missing_ok=True)
     except Exception as error:
@@ -447,6 +457,7 @@ async def _inventorier_cloud(blink: Blink, args, output: Path,
                              state: dict, modules: list) -> _PlanCloud:
     """Construit le plan cloud sans commencer le moindre transfert."""
     clips = await blink_models.read_cloud_manifest(blink, args.since)
+    _noter_liste_cloud(len(clips), len(state["clips"]))
     if args.camera:
         clips = [c for c in clips if c.name.casefold() == args.camera.casefold()]
     if args.hub:
@@ -508,6 +519,7 @@ async def _inventorier_cloud(blink: Blink, args, output: Path,
             clips=clips,
             skipped=len(doublons) + ignores_exclus,
         )
+    _journaliser_inventaire("cloud", len(state["clips"]), len(inedits), len(doublons))
 
     pending = []
     adopted = 0
@@ -578,6 +590,61 @@ def _journaliser_telechargement(source: str, target: Path, output: Path) -> None
     _VIGNETTES_EN_ATTENTE.append((target, output))
 
 
+def _journaliser_inventaire(source: str, connus: int, nouveaux: int, deja: int) -> None:
+    """Ce que la passe a lu avant de décider, s'il y a du neuf à rapatrier.
+
+    Sans cette ligne, une rafale de clips déjà acquis ne dit pas après coup si
+    le registre a été lu vide : un « registre 0 » devant vingt clips le prouve.
+    Lignes de clips inchangées, elles restent lisibles par le même motif."""
+    moment = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    runtime.ajouter_ligne(
+        JOURNAL_TELECHARGEMENTS,
+        f"{moment}  " + msg("journal_inventaire", source=source, connus=connus,
+                            nouveaux=nouveaux, deja=deja))
+
+
+# Vide ou non au tour précédent de ce processus ; None avant le premier tour.
+_liste_cloud_vide = None
+
+
+def _noter_liste_cloud(lus: int, connus: int) -> None:
+    """Trace le passage de la liste cloud à vide, puis son retour (#139).
+
+    blinkpy rend une liste vide, sans erreur, quand la requête de la première
+    page échoue. Un tel tour ressemble alors à un tour sans nouveauté : aucune
+    ligne. Une nuit de listes ratées ne se distinguait pas d'une nuit calme.
+    Seuls les changements d'état sont écrits, pour qu'une boucle de cinq
+    minutes ne remplisse pas le journal."""
+    global _liste_cloud_vide
+    vide = lus == 0
+    if vide == _liste_cloud_vide or (_liste_cloud_vide is None and not vide):
+        _liste_cloud_vide = vide
+        return
+    _liste_cloud_vide = vide
+    moment = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cle = "journal_liste_vide" if vide else "journal_liste_revenue"
+    runtime.ajouter_ligne(
+        JOURNAL_TELECHARGEMENTS,
+        f"{moment}  " + msg(cle, source="cloud", connus=connus, lus=lus))
+
+
+def _journaliser_echecs(source: str, echecs: dict) -> None:
+    """Ce qui a empêché des clips d'arriver, une ligne par motif et par tour.
+
+    Un clip refusé n'est pas inscrit au registre : il revient à chaque tour,
+    fait défiler la barre comme un succès et ne produit rien (issue #139).
+    Sans cette ligne, seule la sortie du passage en gardait la raison. Groupée
+    par motif, car ce fichier n'est pas borné et la boucle cloud tourne chaque
+    minute. ``echecs`` associe (catégorie, détail) à [nombre, nom d'un clip] :
+    ni URL ni identifiant de compte, comme le reste du journal."""
+    moment = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for (categorie, detail), (nombre, exemple) in echecs.items():
+        runtime.ajouter_ligne(
+            JOURNAL_TELECHARGEMENTS,
+            f"{moment}  " + msg("journal_echecs", source=source, n=nombre,
+                                categorie=categorie, detail=detail, exemple=exemple))
+
+
 def _preparer_vignettes() -> None:
     """Fabrique la vignette des clips qui viennent d'arriver, au même endroit et
     sous le même nom que serve.py : la page les trouve déjà prêtes au lieu de
@@ -598,7 +665,7 @@ def _preparer_vignettes() -> None:
         try:
             identite = md.clip_identity(output, target)
             vignette = (output.parent / ".blink_thumbs" / "clip" / identite).with_suffix(".jpg")
-            vignette.parent.mkdir(parents=True, exist_ok=True)
+            runtime.creer_sous_sorties(vignette.parent)
             provisoire = vignette.with_name(f"{vignette.stem}.{os.getpid()}.tmp.jpg")
             try:
                 if md.extraire_vignette(ffmpeg, target, provisoire, timeout=60):
@@ -628,6 +695,7 @@ async def _telecharger_cloud(blink: Blink, args, output: Path, state: dict,
         return CloudResult()
 
     downloaded = failed = adopted_execution = skipped_execution = 0
+    echecs = {}
     # Un job déjà terminé a réussi par l'USB : son équivalent cloud est bien
     # un doublon, jamais un second clip à faire avancer dans la barre.
     skipped_usb = sum(1 for job in jobs if job.cloud is not None and job.done)
@@ -658,6 +726,7 @@ async def _telecharger_cloud(blink: Blink, args, output: Path, state: dict,
         target = blink_models.target_path(output, clip, sync=sync, source="cloud")
         progression.commencer(target.name)
         resultat = "failed"
+        echec = (blink_models.msg("cat_media"), blink_models.msg("contenu_indisponible"))
         partiel = target.with_suffix(target.suffix + ".part")
         partiel.unlink(missing_ok=True)
         try:
@@ -689,7 +758,7 @@ async def _telecharger_cloud(blink: Blink, args, output: Path, state: dict,
                 adopted_execution += 1
                 resultat = "adopted"
             else:
-                target.parent.mkdir(parents=True, exist_ok=True)
+                runtime.creer_sous_sorties(target.parent)
                 telecharge = await clip.download_to(blink, partiel)
                 if telecharge and md.valid_mp4_complet(partiel):
                     partiel.replace(target)
@@ -714,29 +783,32 @@ async def _telecharger_cloud(blink: Blink, args, output: Path, state: dict,
                             print(msg("cloud_suppression_echec"))
                 else:
                     if telecharge:
+                        # Même raison nettoyée que l'USB (issue #49) : le .part
+                        # existe encore, le finally ne l'efface qu'ensuite.
                         clip.download_issue = (
-                            blink_models.msg("cat_donnees"), msg("mp4_tronque"),
+                            blink_models.msg("cat_donnees"),
+                            f"{msg('mp4_tronque')} ({md.raison_refus_mp4(partiel)})",
                         )
-                    categorie, detail = getattr(
-                        clip, "download_issue", None
-                    ) or (blink_models.msg("cat_media"), blink_models.msg("contenu_indisponible"))
-                    print(msg("echec_categorie", categorie=categorie, detail=detail))
+                    echec = getattr(clip, "download_issue", None) or echec
+                    print(msg("echec_categorie", categorie=echec[0], detail=echec[1]))
         except (ClientError, OSError, asyncio.TimeoutError) as erreur:
-            print(msg("echec_categorie", categorie=blink_models.msg("cat_reseau"),
-                      detail=type(erreur).__name__))
+            echec = (blink_models.msg("cat_reseau"), type(erreur).__name__)
+            print(msg("echec_categorie", categorie=echec[0], detail=echec[1]))
         except Exception as erreur:  # Isoler un clip invalide des suivants.
-            print(msg("echec_categorie", categorie=blink_models.msg("cat_donnees"),
-                      detail=type(erreur).__name__))
+            echec = (blink_models.msg("cat_donnees"), type(erreur).__name__)
+            print(msg("echec_categorie", categorie=echec[0], detail=echec[1]))
         finally:
             partiel.unlink(missing_ok=True)
 
         if resultat == "failed":
             failed += 1
+            echecs.setdefault(echec, [0, target.name])[0] += 1
         elif resultat == "skipped":
             skipped_execution += 1
         job.done = True
         progression.terminer()
 
+    _journaliser_echecs("cloud", echecs)
     resultat = CloudResult(
         downloaded=downloaded,
         adopted=plan.adopted + adopted_execution,
@@ -773,11 +845,43 @@ async def traiter_cloud(blink: Blink, args, modules: list) -> CloudResult:
     return resultat
 
 
+ATTENTE_DOSSIER_SORTIES = 5  # secondes entre deux regards sur le dossier
+
+
+async def _attendre_dossier_sorties(output: Path) -> bool:
+    """Patiente tant que le dossier choisi est absent (issue #134).
+
+    Un disque monté en retard : le passage part dès qu'il arrive, sans attendre
+    la prochaine échéance. Signalé une seule fois, le journal ne se remplit
+    pas pendant une nuit de panne. False si l'arrêt est demandé entre-temps."""
+    signale = False
+    while not runtime.arret_demande():
+        try:
+            runtime.exiger_dossier_sorties(output)
+        except runtime.DossierSortiesAbsent as erreur:
+            if not signale:
+                print(erreur, flush=True)
+                signale = True
+            await asyncio.sleep(ATTENTE_DOSSIER_SORTIES)
+            continue
+        if signale:
+            print(msg("dossier_sorties_retrouve"), flush=True)
+        return True
+    return False
+
+
 async def _faire_passage(blink: Blink, args, modules: list,
                          repetition: bool) -> _ResultatPassage:
     """Exécute un passage sous son verrou et nettoie toujours sa publication."""
     execute = False
     try:
+        # « list » n'écrit rien : seul le rapatriement a besoin du dossier. Une
+        # boucle l'attend ; un passage unique échoue, pour le dire à qui l'a
+        # demandé.
+        if args.command == "download":
+            if repetition and not await _attendre_dossier_sorties(args.output):
+                return _ResultatPassage(0, False)
+            runtime.exiger_dossier_sorties(args.output)
         # Un seul rapatriement à la fois, quelle que soit la source : deux
         # processus qui prennent le même clip écriraient le même fichier
         # partiel, et le premier renommage laisserait l'autre dans le vide.
@@ -998,6 +1102,8 @@ async def un_passage(blink: Blink, args, modules: list) -> int:
         blink_registre.save_download_state(output, state)
         deja = len(clips) - len(pending)
         print(msg("incremental", nouveaux=len(pending), deja=deja))
+        if pending:
+            _journaliser_inventaire("usb", len(state["clips"]), len(pending), deja)
         plans_usb.append(_PlanUSB(name, sync, clips, pending, adopted))
 
     plan_cloud = _PlanCloud()

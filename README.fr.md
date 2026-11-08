@@ -63,7 +63,8 @@ lancement et les principaux réglages.
 - Affichage de l'état des caméras : batterie, température, signal, modèle et
   micrologiciel de chaque caméra.
 - Incrustation de la date et heure dans l'image, donc conservée par n'importe
-  quel lecteur. Taille, couleur et opacité du bandeau configurables.
+  quel lecteur. Taille, couleur, opacité du bandeau et heure sur 24 h ou
+  12 h (AM/PM) configurables.
 - Création d'une vidéo par jour, par semaine ISO et par mois, pour chaque
   caméra.
 - Possibilité d'écarter les clips sans intérêt d'un clic, mis de côté plutôt
@@ -132,6 +133,21 @@ recréés pendant le défilement. Changer de vue, de page de galerie ou de filtr
 ou recharger la page, remet la lecture en sourdine. La sourdine de lecture ne
 change pas le son enregistré. Les anciennes vidéos sans son restent sans son.
 
+Pour inclure le son de la caméra dans le direct et les enregistrements,
+activez **Réglages → Vidéo → Inclure le son de la caméra dans le direct et
+les enregistrements**. Cette option est désactivée par défaut et concerne les
+nouvelles sessions. Avec le son, le direct utilise le mode compatible MSE,
+qui peut démarrer plus lentement. Utilisez **Écouter/Couper le son** dans le
+direct ou le volume du lecteur des vidéos sauvegardées. Si le canal principal
+reste silencieux, essayez **Alternatif** dans les réglages. Sans piste audio,
+la vidéo reste lisible.
+
+La lecture commence en sourdine. Activer le son d'une vidéo conserve ce choix
+et le volume pour les autres vidéos de la même page, y compris les lecteurs
+recréés pendant le défilement. Changer de vue, de page de galerie ou de filtre,
+ou recharger la page, remet la lecture en sourdine. La sourdine de lecture ne
+change pas le son enregistré. Les anciennes vidéos sans son restent sans son.
+
 ![L'onglet Clips](Screenshots/serve0.fr.PNG)
 
 Les clips du plus récent au plus ancien. Chaque carte donne la caméra, la
@@ -160,7 +176,8 @@ Les réglages, derrière l'icône engrenage : démarrage automatique à
 l'ouverture de session, actualisation automatique de la page, port du
 serveur, dossier des vidéos avec un sélecteur natif, et cadence de lecture
 du stockage local et du cloud. Aussi l'horodatage incrusté dans l'image
-avec sa taille, sa couleur et l'opacité de son bandeau, le fuseau horaire,
+avec sa taille, sa couleur, l'opacité de son bandeau et l'heure sur 24 h
+ou 12 h, le fuseau horaire,
 le protocole du direct (WebRTC ou MSE), l'archivage
 quotidien/hebdomadaire/mensuel activable indépendamment, la mise en
 sourdine des alertes par caméra, la suppression automatique après
@@ -544,6 +561,20 @@ version 0.13 ou antérieure, le premier lancement y recopie les réglages et la
 session, et les vidéos restent où elles sont : le dossier des vidéos pointe
 vers elles.
 
+### Les vidéos sur un disque à part
+
+Un dossier choisi dans les réglages n'est créé qu'à ce moment-là. S'il manque
+plus tard, parce que le disque n'est pas encore monté au démarrage par exemple,
+blink2video ne le recrée pas sur le disque système : les téléchargements
+l'attendent et partent dès son retour, l'assemblage saute son tour, et un
+bandeau rouge nomme le dossier dans la page. Les réglages restent utilisables
+pendant ce temps, et vous pouvez y choisir un autre dossier.
+
+Choisissez un sous-dossier du disque, comme `/export/cam/blink2video`, plutôt
+que le point de montage lui-même : un point de montage démonté reste un dossier
+vide, que rien ne distingue du vrai. Le dossier par défaut et `BLINK_HOME` se
+créent toujours à la demande.
+
 ### Ne garder les fichiers qu'un temps
 
 Par défaut, rien n'est jamais effacé. Dans les Réglages, « Conservation »
@@ -718,6 +749,7 @@ occupe son propre processus jusqu'à `blink2video stop`.
 | `--font-size N` | taille de l'horodatage en pixels, 8 à 500 (défaut : proportionnelle à la hauteur de la vidéo) |
 | `--font-color COULEUR` | couleur de l'horodatage : un nom (`white`, `yellow`...) ou un hexadécimal (`#RRGGBB`, `0xRRGGBB`), éventuellement suivi de `@opacité` (ex. `white@0.8`), défaut `white` |
 | `--box-opacity N` | opacité du bandeau derrière l'horodatage, `0.0` (invisible) à `1.0` (opaque), défaut `0.55` |
+| `--clock 24h\|12h` | format de l'heure incrustée : `24h` (`14:05:09`, défaut) ou `12h` (`02:05:09 PM`) |
 | `--timezone ZONE` | fuseau de l'horodatage (défaut `Europe/Paris`) |
 | `--input`, `--output`, `--normalized-output`, `--excluded-output`, `--weekly-output`, `--monthly-output` | emplacements de chaque dossier |
 

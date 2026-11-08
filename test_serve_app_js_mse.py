@@ -58,7 +58,6 @@ class TestsLecteurMse(unittest.TestCase):
         cls.bloc_mse = bloc
         cls.bloc_mse = audio_source(source) + "\n" + cls.bloc_mse
 
-
     def _executer(self, scenario: str) -> dict:
         script = r"""
 // argv[1] est le chemin du script temporaire (plus -e : voir _executer),
