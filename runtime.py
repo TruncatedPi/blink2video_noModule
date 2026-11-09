@@ -31,6 +31,7 @@ import signal
 import subprocess
 import sys
 import time
+import unicodedata
 import urllib.request
 from pathlib import Path
 from typing import NamedTuple
@@ -42,7 +43,7 @@ import _amorcage
 # workflow de release refuse une étiquette qui ne lui correspond pas. Un binaire
 # doit pouvoir dire ce qu'il est, ne serait-ce que pour qu'un rapport de bogue
 # soit exploitable.
-VERSION = "0.28.4"
+VERSION = "0.29.0"
 WINDOWS7_BUILD_MARKER = "windows7-build.txt"
 
 
@@ -182,7 +183,13 @@ REGLAGES_DEFAUT = {"usb_minutes": 10, "cloud_minutes": 1, "port": 8765, "timesta
                    "doorbell_chime_enabled": True,
                    "doorbell_poll_interval_seconds": 30,
                    # Vide : dossier par défaut, voir dossier_sorties().
-                   "dossier_sorties": ""}
+                   "dossier_sorties": "",
+                   # En-tête de la page (issue #40) : vide = « blink2video »
+                   # sans icône. Sert à distinguer une instance d'une autre.
+                   "header_title": "", "header_icon": ""}
+# Bornes de l'en-tête, en caractères : un titre qui tient sur la ligne, une
+# icône d'un émoji, fût-il composé (famille, drapeau : plusieurs points de code).
+ENTETE_MAX = {"header_title": 60, "header_icon": 16}
 # Conservation par catégorie, en jours (issue #120) : 0 garde pour toujours,
 # le comportement de toujours, donc la valeur par défaut. La purge elle-même
 # est dans merge_daily.purger_anciens().
@@ -324,6 +331,17 @@ def _fuseau_reglages(valeurs: dict) -> str:
     return str(valeurs.get("timezone", "") or "").strip() or REGLAGES_DEFAUT["timezone"]
 
 
+def texte_entete(valeur) -> str:
+    """Titre ou icône de l'en-tête, sans caractère de contrôle ni espace en bord.
+
+    Seuls les contrôles (catégorie Cc : retour à la ligne, tabulation...)
+    partent : le liant invisible des émojis composés (U+200D, catégorie Cf)
+    doit rester, sans quoi une famille deviendrait quatre visages."""
+    if not isinstance(valeur, str):
+        return ""
+    return "".join(c for c in valeur if unicodedata.category(c) != "Cc").strip()
+
+
 def lire_reglages() -> dict:
     """Cadences USB/cloud, port, horodatage et fuseau actuels, modifiables
     depuis la page web.
@@ -395,6 +413,9 @@ def lire_reglages() -> dict:
             valeurs, "doorbell_poll_interval_seconds",
             REGLAGES_DEFAUT["doorbell_poll_interval_seconds"], 2, 300),
         "dossier_sorties": str(valeurs.get("dossier_sorties") or "").strip(),
+        # Fichier retouché à la main au-delà de la borne : tronqué, pas perdu.
+        **{champ: texte_entete(valeurs.get(champ))[:maximum]
+           for champ, maximum in ENTETE_MAX.items()},
         **{champ: _entier_borne(valeurs, champ, 0, 0, CONSERVATION_MAX_JOURS)
            for champ in CONSERVATION},
     }
@@ -438,6 +459,7 @@ def ecrire_reglages(usb_minutes: int, cloud_minutes: int, port: int, timestamp: 
                     doorbell_poll_interval_seconds: int | None = None,
                     date_format: str | None = None, time_format: str | None = None,
                     dossier_sorties: str | None = None,
+                    header_title: str = "", header_icon: str = "",
                     dossier: Path | None = None,
                     **conservation) -> None:
     inconnus = set(conservation) - set(CONSERVATION)
@@ -505,6 +527,8 @@ def ecrire_reglages(usb_minutes: int, cloud_minutes: int, port: int, timestamp: 
         "doorbell_chime_enabled": bool(doorbell_chime_enabled),
         "doorbell_poll_interval_seconds": int(doorbell_poll_interval_seconds),
         "dossier_sorties": str(dossier_sorties).strip(),
+        "header_title": texte_entete(header_title)[:ENTETE_MAX["header_title"]],
+        "header_icon": texte_entete(header_icon)[:ENTETE_MAX["header_icon"]],
         **{champ: int(conservation.get(champ, 0) or 0) for champ in CONSERVATION},
     }))
 

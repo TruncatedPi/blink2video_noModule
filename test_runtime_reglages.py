@@ -133,7 +133,8 @@ class TestsReglages(unittest.TestCase):
              "doorbell_chime_enabled": True,
              "doorbell_poll_interval_seconds": 30,
              "dossier_sorties": "",
-             **{champ: 0 for champ in runtime.CONSERVATION}})
+             **{champ: 0 for champ in runtime.CONSERVATION},
+             "header_title": "", "header_icon": ""})
 
     def test_valeurs_partielles_completees_par_les_defauts(self):
         (self.dossier / runtime.REGLAGES).write_text(
@@ -166,7 +167,8 @@ class TestsReglages(unittest.TestCase):
              "doorbell_chime_enabled": runtime.REGLAGES_DEFAUT["doorbell_chime_enabled"],
              "doorbell_poll_interval_seconds": runtime.REGLAGES_DEFAUT["doorbell_poll_interval_seconds"],
              "dossier_sorties": runtime.REGLAGES_DEFAUT["dossier_sorties"],
-             **{champ: 0 for champ in runtime.CONSERVATION}})
+             **{champ: 0 for champ in runtime.CONSERVATION},
+             "header_title": "", "header_icon": ""})
 
     def test_fuseau_vide_dans_le_fichier_retombe_sur_le_defaut(self):
         (self.dossier / runtime.REGLAGES).write_text(

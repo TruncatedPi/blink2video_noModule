@@ -26,7 +26,7 @@ class DoorbellBrowserTests(unittest.TestCase):
             for name in names)
         start = source.index('if ($("btnAlertHistory"))')
         cls.history = source[start:source.index('if ($("btnAlertWatch"))', start)]
-        start = source.index('$("view").onchange =')
+        start = source.index('const CLE_VUE =')
         cls.change = source[start:source.index('// Seule cette ligne de texte', start)]
 
         cls.functions = formatting_source(source) + "\n" + cls.functions
