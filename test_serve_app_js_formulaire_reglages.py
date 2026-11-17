@@ -82,7 +82,7 @@ const ids = [
   'trustedHost', 'webhookNotifUrl', 'headerTitle', 'headerIcon', 'liveAutoStopSeconds', 'redemarrerButton',
   'conservationClips', 'conservationJour', 'conservationSemaine', 'conservationMois', 'conservationDirects', 'conservationPhotos',
   'doorbellAlertsEnabled', 'doorbellChimeEnabled', 'doorbellAutoRecord', 'doorbellAutoRecordSeconds', 'doorbellPollSeconds',
-  'tabGeneral', 'tabVideo', 'tabAcces', 'tabAlertes', 'tailleCartes', 'barrePagination', 'masquerDetections',
+  'tabGeneral', 'tabVideo', 'tabAcces', 'tabAlertes', 'tailleCartes', 'uniteTemperature', 'barrePagination', 'masquerDetections',
   'panelGeneral', 'panelVideo', 'panelAcces', 'panelAlertes',
 ];
 class Element {
@@ -131,6 +131,7 @@ globalThis.chargerSuppressionAuto = () => {
 };
 globalThis.chargerCamerasMasquees = () => {};
 globalThis.tailleCartes = 'moyennes';
+globalThis.uniteTemperature = 'C';
 globalThis.barrePaginationHaute = true;
 globalThis.masquerDetections = true;
 globalThis.fetch = async (url, options) => {
